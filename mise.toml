@@ -1,0 +1,20 @@
+[tools]
+node = "24.21.0"
+bun = "1.4.2"
+
+[tasks.dev]
+run = "bun run dev"
+[tasks.check]
+run = "bun run check"
+[tasks.test]
+run = "bun run test"
+[tasks.build]
+run = "bun run build"
+[tasks.preview]
+run = "bun run preview"
+[tasks.e2e]
+run = "bun run test:e2e"
+[tasks.benchmark]
+run = "bun run benchmark"
+[tasks.inspect]
+run = "bun run inspect"

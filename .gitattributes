@@ -1,0 +1,2 @@
+# Ciphertext fixtures must retain their exact bytes, including on Windows.
+tests/fixtures/**/d/** binary

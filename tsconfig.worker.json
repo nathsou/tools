@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "lib": ["ES2022", "WebWorker"], "types": ["vite/client"] },
+  "include": ["src/env.d.ts", "src/service-worker.ts", "src/vault.worker.ts", "src/image.worker.ts", "src/lib/crypto.ts", "src/lib/bytes.ts", "src/lib/filesystem.ts", "src/lib/vault.ts", "src/lib/types.ts", "src/lib/ranges.ts"],
+  "exclude": []
+}

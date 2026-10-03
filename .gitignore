@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.tools/
+playwright-report/
+test-results/
+.DS_Store
+.env
+.env.*
+!.env.example
+.crype_cache/

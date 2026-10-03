@@ -1,0 +1,40 @@
+<script lang="ts">
+  let { name, size=20 }: { name:string; size?:number } = $props();
+  const paths:Record<string,string> = {
+    system:'M3 3h18v13H3z M12 16v5 M8 21h8',
+    lock:'M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4 M12 14v3',
+    unlock:'M6 10h12v11H6z M8 10V6a4 4 0 0 1 7.5-2 M12 14v3',
+    folder:'M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+    image:'M4 3h16v18H4z M4 16l5-5 4 4 3-3 4 4 M8 7h.01',
+    video:'M3 5h18v14H3z M10 9l5 3-5 3z',
+    audio:'M9 18V5l10-2v13 M9 9l10-2 M9 18a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3 M19 16a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3',
+    text:'M5 3h9l5 5v13H5z M14 3v6h5 M8 13h8 M8 17h6',
+    file:'M5 3h9l5 5v13H5z M14 3v6h5',
+    symlink:'M9 14l6-6 M8 16l-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0 M16 8l2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0',
+    search:'M16 16l5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
+    arrow:'M5 12h14 M13 6l6 6-6 6',
+    chevron:'M9 5l7 7-7 7',
+    back:'M15 5l-7 7 7 7',
+    grid:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    list:'M8 5h13 M8 12h13 M8 19h13 M3 5h.01 M3 12h.01 M3 19h.01',
+    close:'M6 6l12 12 M18 6L6 18',
+    download:'M12 3v12 M7 10l5 5 5-5 M4 17v4h16v-4',
+    expand:'M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5',
+    fingerprint:'M5 12a7 7 0 0 1 14 0 M3 10a9 9 0 0 1 18 0 M8 14v-2a4 4 0 0 1 8 0v3a12 12 0 0 1-1 6 M11 21a18 18 0 0 0 2-9 M5 15a15 15 0 0 1-1 5 M8 17a12 12 0 0 1-1 4 M19 15v3',
+    shield:'M12 2l8 4v6c0 5-8 10-8 10S4 17 4 12V6z M8 12l3 3 5-6',
+    plus:'M12 4v16 M4 12h16',
+    more:'M5 12h.01 M12 12h.01 M19 12h.01',
+    rename:'M4 16l12-12 4 4-12 12H4z M13 7l4 4 M3 22h18',
+    move:'M3 7h7l2 3h9v11H3z M12 2v8 M8 6l4 4 4-4',
+    trash:'M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7',
+    refresh:'M20 7v5h-5 M4 17v-5h5 M19 12a7 7 0 0 0-12-5 M5 12a7 7 0 0 0 12 5',
+    moon:'M20 15A9 9 0 0 1 9 3a9 9 0 1 0 11 12',
+    sun:'M12 2v2 M12 20v2 M2 12h2 M20 12h2 M5 5l1 1 M18 18l1 1 M5 19l1-1 M18 6l1-1 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+    settings:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z',
+    check:'M5 12l4 4 10-10',
+    info:'M12 11v6 M12 7h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+    cloud:'M7 18H5a4 4 0 0 1-1-8 7 7 0 0 1 13-3 5 5 0 0 1 2 10 M3 3l18 18',
+    clock:'M12 7v5l3 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'
+  };
+</script>
+<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={paths[name] ?? paths.file}/></svg>

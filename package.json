@@ -1,0 +1,32 @@
+{
+  "name": "tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.worker.json",
+    "test": "bun test tests/unit",
+    "test:e2e": "playwright test",
+    "fixtures": "node scripts/generate-fixtures.ts",
+    "benchmark": "node scripts/benchmark.ts",
+    "inspect": "node scripts/inspect.ts"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "libheif-js": "1.23.2",
+    "mediabunny": "1.61.0",
+    "svelte": "5.57.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "26.6.4",
+    "svelte-check": "4.7.6",
+    "typescript": "6.0.3",
+    "vite": "8.3.2"
+  }
+}
