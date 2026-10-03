@@ -41,7 +41,9 @@ Serve the contents of `dist/` over HTTPS. No backend is needed. Relative asset U
 
 Crypte's manifest, offline cache, media endpoints, and service worker live within its route. Other tools do not inherit its worker. A small root worker retires the former root-scoped Crypte cache when upgrading an existing installation. Vault contents and passwords are not uploaded or stored in the offline cache. All code hosted on this origin should be trusted: browser storage and file permissions belong to the origin.
 
-The included CI checks types, runs unit tests, and builds the site on pushes to `main` and pull requests. Deployment remains separate from the repository push.
+The included workflow checks types, runs unit tests, and builds the site on pushes to `main` and pull requests. Successful builds on `main` deploy `dist/` to GitHub Pages. Pull requests only run checks. The workflow can also be run manually.
+
+Published site: [Tools](https://nathsou.github.io/tools/) · [Crypte](https://nathsou.github.io/tools/crypte/).
 
 ## Layout
 
