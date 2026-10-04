@@ -40,7 +40,9 @@ With “Remember this vault” enabled and native directory-handle storage suppo
 
 Chromium 153 has a [filesystem-handle/IndexedDB crash in private contexts](https://issuetracker.google.com/issues/564001201). Crypte conservatively remembers vault metadata without storing handles on that major version, so reopening requires selecting the folder again. It does not attempt to detect private browsing. Other versions can retain the native handle, subject to renewed read permission.
 
-Dot-prefixed files and folders, such as `.DS_Store`, are hidden by default. Toggle **Preferences → Hide dotfiles** to show them. This preference is remembered on the device and applies to gallery/list views, search, counts, and opened-folder navigation.
+macOS AppleDouble sidecars (`._*`) and `.DS_Store` files on the **encrypted filesystem** are ignored when scanning vault entries and validating entry metadata. These OS metadata files are not Cryptomator ciphertext, even when their names end in `.c9r` or `.c9s`. Browsing does not delete them, and they are not copied as vault payloads during moves. This rule does not hide real decrypted dotfiles or suppress damaged encrypted entries.
+
+Dot-prefixed files and folders **inside the decrypted vault**, such as `.DS_Store`, are hidden by default. Toggle **Preferences → Hide dotfiles** to show them. This preference is remembered on the device and applies to gallery/list views, search, counts, and opened-folder navigation.
 
 Features include gallery and list views, breadcrumbs, folder search, filters, sorting, image and video thumbnails, image zoom/pan, a video thumbnail timeline, text reading with search and line numbers, audio/video playback and seeking, System/Light/Dark appearance, and decrypted export. Search and type filters apply to the current folder. Symbolic links show their target as text and are never followed. HTML, Markdown, SVG source files, and other documents are not executed as documents in the app.
 

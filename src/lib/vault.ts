@@ -1,6 +1,6 @@
 import { concat, digest, fromBase64, random, toBase64, toBase64Url, utf8, type Bytes } from './bytes';
 import { CLEAR_CHUNK, chunkOverhead, cleartextSize, createMaterial, decryptChunk, decryptHeader, decryptName, destroyMaterial, directoryPath, encryptChunk, encryptHeader, encryptName, headerSize, paddedBase64Url, parseConfiguration, parseMasterkey, unlockMasterkey, validateName, verifyConfiguration, verifyMasterkeyVersion, type FileHeader, type MasterkeyFile, type Material, type ParsedConfiguration } from './crypto';
-import { createStorage, readSmall, type VaultStorage } from './filesystem';
+import { createStorage, isFilesystemMetadata, readSmall, type VaultStorage } from './filesystem';
 import { classify, type ImportPlan, type Listing, type PasskeyRecord, type Source, type VaultEntry, type VaultInfo, type WritePlan, type WriteRequest,type TextSnapshot,type ReplacementPlan,type EditFingerprint } from './types';
 
 export class Vault {
@@ -50,7 +50,7 @@ export class Vault {
     const nodes = await this.storage.list(path);
     const entries: VaultEntry[] = [], warnings: string[] = [];
     for (const node of nodes) {
-      if (node.name === 'dirid.c9r' || !/\.c9[rs]$/.test(node.name)) continue;
+      if (isFilesystemMetadata(node) || node.name === 'dirid.c9r' || !/\.c9[rs]$/.test(node.name)) continue;
       const nodePath = `${path}/${node.name}`;
       let name = node.name;
       try {
@@ -250,7 +250,7 @@ export class Vault {
       const sourcePath=entry.kind==='folder' ? entry.path : entry.kind==='symlink' || entry.path.endsWith('/contents.c9r') ? entry.path.slice(0,entry.path.lastIndexOf('/')) : entry.path;
       plan.sourcePath=sourcePath;
       const payload=entry.kind==='folder' ? 'dir.c9r' : entry.kind==='symlink' ? 'symlink.c9r' : entry.path.endsWith('/contents.c9r') ? 'contents.c9r' : '';
-      const paths=payload ? (await this.storage.list(sourcePath)).map(node=>{
+      const paths=payload ? (await this.storage.list(sourcePath)).filter(node=>!isFilesystemMetadata(node)).map(node=>{
         if(node.kind!=='file' || ![payload,'name.c9s'].includes(node.name))throw new Error('This entry contains unexpected metadata. Repair it in Cryptomator before changing it.');
         return `${sourcePath}/${node.name}`;
       }) : [sourcePath];

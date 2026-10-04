@@ -1050,3 +1050,19 @@ test('background timeout locks independently from inactivity and can be disabled
   await page.clock.install();await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});await page.clock.fastForward(120001);await expect(page.locator('.app-shell')).toBeVisible();
   await page.getByRole('button',{name:'Preferences',exact:true}).click();await page.getByLabel('Background lock timeout').fill('0.5');await page.getByRole('button',{name:'Close preferences',exact:true}).click();await page.clock.fastForward(30001);await expect(page.getByLabel('Vault password')).toBeVisible();
 });
+
+for(const fixture of ['gcm','ctr','legacy'])test(`${fixture} ignores AppleDouble sidecars while browsing, renaming shortened entries and deleting folders`,async({page})=>{
+  await nativeSource(page,fixture);
+  const paths:string[]=JSON.parse(await readFile(`tests/fixtures/${fixture}/index.json`,'utf8'));
+  await page.evaluate(async paths=>{
+    const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('Handle fixture');
+    for(const path of paths){const parts=path.split('/');let folder=root;for(const part of parts.slice(0,-1))folder=await folder.getDirectoryHandle(part);for(const name of ['._'+parts.at(-1),'.DS_Store']){const writer=await(await folder.getFileHandle(name,{create:true})).createWritable();await writer.write(new Uint8Array([0,5,22,7]));await writer.close();}}
+  },paths);
+  await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);await expect(page.getByRole('heading',{name:'All files',exact:true})).toBeVisible();await expect(page.locator('.vault-warnings')).toHaveCount(0);
+  await fileAction(page,'Words & thoughts','Rename');await page.getByLabel('New name').fill('Notes');await page.getByRole('dialog').getByRole('button',{name:'Rename',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  const id=await folderId(page,'Notes');await page.getByRole('button',{name:'Open Notes',exact:true}).click();await expect(page.locator('.vault-warnings')).toHaveCount(0);
+  const long=(await page.getByRole('button',{name:/Open A very long name/}).getAttribute('aria-label'))!.slice(5),oldPath=importPath(long,id).path.replace('=.c9s/','.c9s/'),original=await nativeBytes(page,oldPath);
+  await fileAction(page,long,'Rename');await page.getByLabel('New name').fill('Short.txt');await page.getByRole('dialog').getByRole('button',{name:'Rename',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await nativeBytes(page,importPath('Short.txt',id).path)).toEqual(original);await page.getByRole('button',{name:'Open Short.txt',exact:true}).click();await expect(page.locator('.reader')).toContainText('Long filenames');
+  await page.locator('.breadcrumbs button').first().click();await fileAction(page,'Notes','Delete');await page.getByRole('button',{name:'Delete permanently',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);expect(await nativeHas(page,contentPath(id))).toBe(false);await expect(page.locator('.vault-warnings')).toHaveCount(0);
+});

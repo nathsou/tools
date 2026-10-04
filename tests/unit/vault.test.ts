@@ -27,6 +27,20 @@ for(const name of ['gcm','ctr','legacy'])describe(`${name} vault`,()=>{
     expect(root.find(e=>e.name==='Link to field notes')?.kind).toBe('symlink');
     expect((await vault.list('')).warnings).toEqual([]);
   });
+  test('ignores macOS sidecars without hiding real decrypted dotfiles or corrupt vault entries',async()=>{
+    const sidecars=source.files.map(({path})=>{const parts=path.split('/');parts[parts.length-1]='._'+parts.at(-1);return {path:parts.join('/'),file:new File([new Uint8Array([0,5,22,7])],parts.at(-1)!)};});
+    const decorated={...source,files:[...source.files,...sidecars]},v=new Vault(decorated);
+    await v.prepare();await v.unlock('crypte-demo');
+    const listing=await v.list('');expect(listing.warnings).toEqual([]);expect(listing.entries.map(e=>e.name)).toEqual(root.map(e=>e.name));
+    expect(listing.entries.find(e=>e.name==='.DS_Store')).toBeDefined();
+    const words=listing.entries.find(e=>e.name==='Words & thoughts')!,children=await v.list(words.directoryId!);expect(children.warnings).toEqual([]);
+    const long=children.entries.find(e=>e.path.endsWith('/contents.c9r'))!,plan=await v.planWrite({kind:'move',parentId:words.directoryId!,entryId:long.id,targetId:words.directoryId!,name:'Short.txt'});
+    expect(plan.sourceFiles).toHaveLength(2);expect(plan.sourceFiles.every(file=>!file.path.split('/').at(-1)!.startsWith('._'))).toBe(true);v.finishWrite(plan.id,false);
+    const folderPlan=await v.planWrite({kind:'delete',parentId:'',entryId:words.id});expect(folderPlan.removedFolders).toHaveLength(1);v.finishWrite(folderPlan.id,false);v.lock();
+    const path=root.find(e=>e.kind==='text')!.path.split('/').slice(0,-1).join('/')+'/invalid!.c9r';
+    const damaged=new Vault({...decorated,files:[...decorated.files,{path,file:new File([new Uint8Array(100)],'invalid!.c9r')}]});await damaged.prepare();await damaged.unlock('crypte-demo');expect((await damaged.list('')).warnings).toHaveLength(1);
+    await expect(damaged.planWrite({kind:'delete',parentId:'',entryId:words.id})).rejects.toThrow('unreadable entries');damaged.lock();
+  });
   test('reads text and treats symlinks as text without following them',async()=>{
     const entry=root.find(e=>e.name==='Field notes.txt')!;
     expect(text(await vault.read(entry.id,0,entry.size))).toContain('FIELD NOTES');

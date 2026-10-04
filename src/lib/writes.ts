@@ -1,6 +1,6 @@
 import {removeCachedThumbnails} from './private-cache';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { safePath } from './filesystem';
+import { isFilesystemMetadata, safePath } from './filesystem';
 import { vaultWriteLock,writePermission } from './imports';
 import type { VaultClient } from './client';
 import type { FileStamp,WriteOutcome,WritePlan,WriteRequest } from './types';
@@ -21,7 +21,7 @@ async function unchanged(root:FileSystemDirectoryHandle,plan:WritePlan):Promise<
   }
   if(plan.sourcePath && plan.sourceFiles.every(file=>file.path!==plan.sourcePath)) {
     const {folder,name}=await parent(root,plan.sourcePath),node=await folder.getDirectoryHandle(name),names:string[]=[];
-    for await(const [child] of node.entries())names.push(child);
+    for await(const [child,handle] of node.entries())if(!isFilesystemMetadata({name:child,kind:handle.kind}))names.push(child);
     if(names.length!==plan.sourceFiles.length || names.some(name=>!plan.sourceFiles.some(file=>file.path===`${plan.sourcePath}/${name}`)))throw new Error('The source entry changed during this operation.');
   }
 }

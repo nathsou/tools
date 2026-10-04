@@ -1,5 +1,8 @@
 import type { Source } from './types';
 export interface StorageEntry { name: string; kind: 'file' | 'directory'; }
+/** macOS sidecars on the encrypted filesystem, not encrypted vault entries.
+ * Check ciphertext storage names only: decrypted dotfiles are ordinary content. */
+export const isFilesystemMetadata = (entry:StorageEntry):boolean => entry.kind === 'file' && (entry.name.startsWith('._') || entry.name === '.DS_Store');
 export interface VaultStorage {
   name: string;
   file(path: string): Promise<File>;
