@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { Vault } from './lib/vault';
+import {generateVault} from './lib/crypto';
 import type { PasskeyRecord, Source } from './lib/types';
 let vault: Vault | undefined;
 self.onmessage = async (event: MessageEvent) => {
@@ -7,6 +8,7 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     let result: unknown;
     switch (action) {
+      case 'generate': result=await generateVault(args[0],progress=>self.postMessage({id,progress}));break;
       case 'prepare': vault?.lock(); vault = new Vault(args[0] as Source); result = await vault.prepare(); break;
       case 'unlock': result = await vault!.unlock(args[0], progress => self.postMessage({ id, progress })); break;
       case 'list': result = await vault!.list(args[0]); break;

@@ -4,7 +4,7 @@ A collection of web-based tools by [nathsou](https://github.com/nathsou). The si
 
 | Tool | Route | Description |
 | --- | --- | --- |
-| [Crypte](crypte/README.md) | `/crypte/` | A local Cryptomator vault manager with file management, media previews/conversion, text editing, and passkey unlock. |
+| [Crypte](crypte/README.md) | `/crypte/` | A local Cryptomator vault manager with vault creation, file management, media previews/conversion jobs, text editing, and passkey unlock. |
 
 ## Development
 

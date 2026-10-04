@@ -1,4 +1,5 @@
 import type { Bytes } from './bytes';
+import type {VaultBootstrap} from './crypto';
 import type { ImportPlan, Listing, PasskeyRecord, Source, VaultEntry, VaultInfo, WritePlan, WriteRequest,TextSnapshot,EditFingerprint,ReplacementPlan } from './types';
 export class VaultClient {
   private worker: Worker;
@@ -30,6 +31,7 @@ export class VaultClient {
     return this.call('prepare',[plain]);
   }
   unlock(password:string,progress?:(p:number)=>void):Promise<VaultInfo> { return this.call('unlock',[password],progress); }
+  generate(password:string,progress?:(p:number)=>void):Promise<VaultBootstrap> {return this.call('generate',[password],progress);}
   list(id:string):Promise<Listing> { return this.call('list',[id]); }
   beginImport(file:File,directoryId:string):Promise<ImportPlan> {return this.call('begin-import',[file,directoryId]);}
   beginReadableImport(name:string,size:number,directoryId:string):Promise<ImportPlan> {return this.call('begin-readable-import',[name,size,directoryId]);}

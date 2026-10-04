@@ -24,7 +24,7 @@ export async function convertImage(client:VaultClient,entry:VaultEntry,settings:
   finally{native.close();canvas.width=canvas.height=1;}
 }
 export function spoolInput(spool:EncryptedSpool):Input{return new Input({formats:LOCAL_FORMATS,source:new CustomSource({getSize:()=>spool.size,maxCacheSize:4*1024*1024,read:(start,end)=>new ReadableStream({async pull(controller){try{const next=Math.min(end,start+4*1024*1024);controller.enqueue(await spool.read(start,next));start=next;if(start===end)controller.close();}catch(e){controller.error(e);}}})})});}
-export async function convertMedia(client:VaultClient,entry:VaultEntry,settings:ConvertSettings,signal:AbortSignal,progress:(fraction:number)=>void,image?:Blob):Promise<ConvertedMedia>{
+async function convertMediaNow(client:VaultClient,entry:VaultEntry,settings:ConvertSettings,signal:AbortSignal,progress:(fraction:number)=>void,image?:Blob):Promise<ConvertedMedia>{
   const spool=new EncryptedSpool(client,signal);await spool.init();let input:Input|undefined,conversion:Conversion|undefined;const abort=()=>{void conversion?.cancel().catch(()=>{});input?.dispose();};signal.addEventListener('abort',abort,{once:true});
   try{
     let mime:string,details:MediaDetails|undefined;
@@ -50,4 +50,20 @@ export async function convertMedia(client:VaultClient,entry:VaultEntry,settings:
 export async function sourceStamp(root:FileSystemDirectoryHandle,entry:VaultEntry,signal:AbortSignal):Promise<FileStamp&{digest:string}>{
   const parts=safePath(entry.path);let directory=root;for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part);const file=await(await directory.getFileHandle(parts.at(-1)!)).getFile(),hash=sha256.create();
   try{if(file.lastModified!==entry.modified)throw new Error('The original changed. Refresh the folder before converting it.');for(let offset=0;offset<file.size;offset+=4*1024*1024){signal.throwIfAborted();hash.update(new Uint8Array(await file.slice(offset,offset+4*1024*1024).arrayBuffer()));}return {path:entry.path,size:file.size,modified:file.lastModified,digest:Array.from(hash.digest(),byte=>byte.toString(16).padStart(2,'0')).join('')};}finally{hash.destroy();}
+}
+
+let conversionActive=false;
+const conversionWaiters:(()=>void)[]=[];
+async function acquireConversion(signal:AbortSignal):Promise<void>{
+  signal.throwIfAborted();if(!conversionActive){conversionActive=true;return;}
+  await new Promise<void>((resolve,reject)=>{
+    const next=()=>{signal.removeEventListener('abort',abort);resolve();};
+    const abort=()=>{const index=conversionWaiters.indexOf(next);if(index>=0)conversionWaiters.splice(index,1);reject(signal.reason);};
+    conversionWaiters.push(next);signal.addEventListener('abort',abort,{once:true});
+  });
+}
+export async function convertMedia(client:VaultClient,entry:VaultEntry,settings:ConvertSettings,signal:AbortSignal,progress:(fraction:number)=>void,image?:Blob):Promise<ConvertedMedia>{
+  await acquireConversion(signal);
+  try{signal.throwIfAborted();progress(0);return await convertMediaNow(client,entry,settings,signal,progress,image);}
+  finally{const next=conversionWaiters.shift();if(next)next();else conversionActive=false;}
 }

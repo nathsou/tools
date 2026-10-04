@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy,tick } from 'svelte';
   import Icon from './Icon.svelte';
+  import ImageViewer from './ImageViewer.svelte';
+  import VideoTimeline from './VideoTimeline.svelte';
+  import {highlightCode,syntaxLanguage} from '../lib/highlighting';
   import { readBlob, exportFile } from '../lib/previews';
   import { mediaURL, revokeMediaURL } from '../lib/media';
   import { formatSize, type VaultEntry,type EditFingerprint } from '../lib/types';
@@ -14,6 +17,8 @@
   let editing=$state(false),openingEditor=$state(false),saving=$state(false),draft=$state(''),original=$state('');
   let format:TextFormat|undefined,fingerprint:EditFingerprint|undefined,editorController:AbortController|undefined;
   let editorArea=$state<HTMLTextAreaElement>();
+  let highlighted=$state(''),highlightLayer=$state<HTMLPreElement>(),editorTop=$state(0),editorLeft=$state(0);
+  $effect(()=>{const code=draft;if(!editing)return;const timer=setTimeout(()=>highlighted=highlightCode(code,entry.name),100);return()=>clearTimeout(timer);});
   const dirty=$derived(editing&&draft!==original);
   const editable=$derived(entry.kind==='text'&&entry.mime!=='application/rtf'&&entry.size<=TEXT_EDIT_LIMIT);
   $effect(()=>{oneditstate({dirty,saving,discard});});
@@ -91,7 +96,7 @@
   {#if error}<p class="error-banner" role="alert">{error}</p>{/if}
   {#if mediaEntry&&!streaming&&!streamingPending}<div class="preview-note"><p>{streamingError}</p><p>Large video and audio files can play without a full in-memory copy when local streaming is available.</p><button class="small-button" onclick={onretryStreaming}>Retry streaming</button></div>{/if}
   <div class="preview-content" class:text-preview={entry.kind === 'text' || entry.kind === 'symlink'}>
-    {#if editing}<textarea class="text-editor" bind:this={editorArea} bind:value={draft} aria-label="Edit file contents" spellcheck="false" autocomplete="off" autocapitalize="off" disabled={saving} style:font-size={`${fontSize}px`}></textarea><p class="preview-note">Changes stay in memory until saved. Locking discards unsaved edits. ⌘/Ctrl S saves.</p>
+    {#if editing}<div class="highlight-editor" style:font-size={`${fontSize}px`}><pre aria-hidden="true" bind:this={highlightLayer} style:transform={`translate(${-editorLeft}px, ${-editorTop}px)`}><code>{@html highlighted}{'\n'}</code></pre><textarea class="text-editor" bind:this={editorArea} bind:value={draft} aria-label="Edit file contents" spellcheck="false" autocomplete="off" autocapitalize="off" disabled={saving} wrap="off" onscroll={event=>{editorTop=event.currentTarget.scrollTop;editorLeft=event.currentTarget.scrollLeft;}}></textarea></div><p class="preview-note">{syntaxLanguage(entry.name)&&draft.length<=256*1024?'Syntax highlighting enabled. ':''}Changes stay in memory until saved. Locking discards unsaved edits. ⌘/Ctrl S saves.</p>
     {:else if loading}<div class="preview-empty"><div class="spinner"></div><p>{preparingStreaming ? 'Preparing local media streaming…' : 'Opening your file…'}</p></div>
     {:else if entry.kind === 'text' || entry.kind === 'symlink'}
       <div class="reader-controls"><label><Icon name="search" size={15}/><input aria-label="Find in file" placeholder="Find in file" bind:value={textSearch}/></label><button class="small-button" class:active={wrap} onclick={()=>wrap=!wrap}>Wrap</button><button class="small-button" aria-label="Smaller text" onclick={()=>fontSize=Math.max(11,fontSize-1)}>A−</button><button class="small-button" aria-label="Larger text" onclick={()=>fontSize=Math.min(24,fontSize+1)}>A+</button></div>
@@ -101,8 +106,8 @@
         {#each lines as line,index}<div class="reader-line" class:match={textSearch && line.toLowerCase().includes(textSearch.toLowerCase())}><span class="line-number">{index+1}</span><span>{line || ' '}</span></div>{/each}
       </div>
       {#if entry.size > 2*1024*1024}<p class="preview-note">Showing the first 2 MB. Export to read the entire file.</p>{/if}
-    {:else if entry.kind === 'image' && url}<div class="image-view"><img src={url} alt={entry.name} onerror={()=>{error='Image preview failed. The format may be unsupported or the file may be damaged. Export to open it in another app.';}}/></div>
-    {:else if entry.kind === 'video' && url}<div class="video-view"><video bind:this={media} src={url} controls playsinline preload="metadata" onerror={()=>error='Playback failed. The codec may be unsupported, the vault may be locked, or the file could not be authenticated.'}><track kind="captions"/></video></div>
+    {:else if entry.kind === 'image' && url}<ImageViewer {url} name={entry.name} onerror={()=>{error='Image preview failed. The format may be unsupported or the file may be damaged. Export to open it in another app.';}}/>
+    {:else if entry.kind === 'video' && url}<div class="video-view"><video bind:this={media} src={url} controls playsinline preload="metadata" onerror={()=>error='Playback failed. The codec may be unsupported, the vault may be locked, or the file could not be authenticated.'}><track kind="captions"/></video></div><VideoTimeline {client} {entry} {media}/>
     {:else if entry.kind === 'audio' && url}<div class="audio-view"><Icon name="audio" size={76}/><audio bind:this={media} src={url} controls preload="metadata" onerror={()=>error='Playback failed. Try exporting the file to a compatible player.'}></audio></div>
     {:else if !error}<div class="preview-empty"><Icon name="file" size={52}/><h3>No preview for this file type</h3><p>Export a decrypted copy to open it in another app.</p></div>{/if}
   </div>

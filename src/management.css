@@ -61,3 +61,44 @@
 .converted-preview audio { max-width:100%;width:100%; }
 .conversion-dialog progress { width:100%;margin-top:14px; }
 @media(max-width:580px){.conversion-options{grid-template-columns:1fr;gap:12px;}.conversion-dialog .dialog-actions{gap:7px;}.conversion-dialog .dialog-actions>button{flex:1;}.converted-preview video{width:100%;}}
+
+.create-vault-form>input { width:100%;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);font-size:13px;margin-bottom:15px; }
+.create-vault-form>.secondary-button { width:100%; }
+.create-vault-form .setting-note { font-size:11px;line-height:1.7;margin-bottom:18px;color:var(--muted);overflow-wrap:anywhere; }
+.create-vault-button { width:100%;margin-top:12px; }
+.setting-row input[type=number] { width:95px;max-width:35%;padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--input);color:var(--text); }
+.conversion-job { display:flex;justify-content:space-between;align-items:center;gap:15px;border:1px solid var(--border);background:var(--panel);border-radius:10px;padding:18px;margin-top:16px; }
+.conversion-job>div:first-child { min-width:0; }
+.conversion-job h2 { font-size:14px;overflow-wrap:anywhere; }
+.conversion-job p { font-size:11px;color:var(--muted);margin-top:8px; }
+.conversion-job>div:last-child { display:flex;gap:7px;flex-shrink:0; }
+.conversion-job progress { width:100%;margin-top:10px; }
+.image-controls { display:flex;align-items:center;justify-content:center;gap:12px;padding:10px;font-size:12px; }
+.image-view { height:clamp(220px,45vh,600px);overflow:hidden;touch-action:none;user-select:none; }
+.image-view img { width:100%;height:100%;object-fit:contain;max-height:100%;pointer-events:none;transform-origin:center; }
+.image-view.zoomed { cursor:grab; }
+.image-view.dragging { cursor:grabbing; }
+.highlight-editor { position:relative;overflow:hidden;flex:1;min-height:300px;background:var(--bg); }
+.highlight-editor pre,.highlight-editor .text-editor { margin:0;padding:20px;font:inherit;font-family:"SFMono-Regular",Consolas,monospace;line-height:1.8;tab-size:2;white-space:pre;overflow-wrap:normal;border:0; }
+.highlight-editor pre { position:absolute;top:0;left:0;pointer-events:none;min-width:100%;color:var(--text); }
+.highlight-editor .text-editor { position:absolute;inset:0;width:100%;height:100%;background:transparent;color:transparent;caret-color:var(--text);resize:none;overflow:auto; }
+.highlight-editor .text-editor::selection { background:#7b9d7055; }
+.hljs-keyword,.hljs-selector-tag,.hljs-literal { color:#8750a4; }
+.hljs-string,.hljs-attr { color:#31764b; }
+.hljs-number,.hljs-title,.hljs-built_in { color:#306d9d; }
+.hljs-comment,.hljs-meta { color:#727c75; }
+[data-theme=dark] .hljs-keyword,[data-theme=dark] .hljs-literal { color:#d6a0f0; }
+[data-theme=dark] .hljs-string,[data-theme=dark] .hljs-attr { color:#a3d7ad; }
+[data-theme=dark] .hljs-number,[data-theme=dark] .hljs-title,[data-theme=dark] .hljs-built_in { color:#91c9f2; }
+.video-timeline { padding:16px 10px; }
+.timeline-track { position:relative; }
+.timeline-track input { width:100%;accent-color:var(--strong); }
+.timeline-times { display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin:8px 0; }
+.timeline-frames { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px; }
+.timeline-frames button { min-width:0;padding:0;background:var(--surface);border-radius:5px;overflow:hidden;font-size:9px; }
+.timeline-frames img { width:100%;display:block;aspect-ratio:8/5;object-fit:contain; }
+.timeline-frames span { display:block;padding:5px; }
+.timeline-hover { position:absolute;bottom:30px;transform:translateX(-50%);width:130px;background:var(--panel);border:1px solid var(--border);border-radius:7px;padding:5px;pointer-events:none;text-align:center;font-size:10px;z-index:1; }
+.timeline-hover img { display:block;width:100%;margin-bottom:5px; }
+@media(max-width:580px){.conversion-job{align-items:flex-start;flex-direction:column;}.image-view{height:40vh;}}
+.highlight-editor code { font:inherit; }

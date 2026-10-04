@@ -16,3 +16,17 @@ export async function videoThumbnail(client:VaultClient,entry:VaultEntry,signal:
     const canvas=frame.canvas;try{const blob=canvas instanceof OffscreenCanvas ? await canvas.convertToBlob({type:'image/webp',quality:.8}) : await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,'image/webp',.8));combined.throwIfAborted();if(!blob)throw new Error('No thumbnail.');return blob;}finally{canvas.width=canvas.height=1;}
   }finally{input.dispose();}
 }
+/** Eight sequential frames keep decoding and plaintext memory bounded. */
+export async function videoFrames(client:VaultClient,entry:VaultEntry,signal:AbortSignal,onframe:(time:number,blob:Blob,duration:number)=>void):Promise<void>{
+  const combined=AbortSignal.any([signal,AbortSignal.timeout(60000)]),input=vaultInput(client,entry,combined);
+  try{
+    const track=await input.getPrimaryVideoTrack();if(!track||!await track.canDecode())throw new Error('Unsupported video codec.');
+    const duration=await track.computeDuration();if(!Number.isFinite(duration)||duration<=0)throw new Error('Unknown duration.');
+    const sink=new CanvasSink(track,{width:160,height:100,fit:'contain',poolSize:1});
+    for(let i=0;i<8;i++){
+      combined.throwIfAborted();const time=duration*i/8,frame=await sink.getCanvas(time);if(!frame)continue;
+      const canvas=frame.canvas;
+      try{const blob=canvas instanceof OffscreenCanvas?await canvas.convertToBlob({type:'image/webp',quality:.7}):await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,'image/webp',.7));combined.throwIfAborted();if(blob)onframe(time,blob,duration);}finally{canvas.width=canvas.height=1;}
+    }
+  }finally{input.dispose();}
+}

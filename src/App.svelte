@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
+  import {persistVault} from './lib/creation';
   import Icon from './components/Icon.svelte';
   import Thumbnail from './components/Thumbnail.svelte';
   import ConversionDialog from './components/ConversionDialog.svelte';
@@ -22,14 +23,20 @@
   import { startThumbnailSession,clearThumbnailCache,invalidateThumbnails } from './lib/previews';
 
   type Crumb={name:string;id:string};
-  type AppView={kind:'locked'}|{kind:'vault';breadcrumbs:Crumb[];selectedId?:string;expanded:boolean;settings:boolean;filter:string;search:string;sort:string;view:'grid'|'list';scroll:number};
+  type AppView={kind:'locked'}|{kind:'vault';breadcrumbs:Crumb[];selectedId?:string;expanded:boolean;settings:boolean;filter:string;search:string;sort:string;view:'grid'|'list';scroll:number;tab:'files'|'conversions'};
   let appHistory:ViewHistory<AppView>|undefined;
   let explorerContent=$state<HTMLDivElement>();
 
+  type ConversionJob={id:string;entry:VaultEntry;parentId:string;crumbs:Crumb[];status:string;progress:number};
+  let conversions=$state<ConversionJob[]>([]),activeConversion=$state(''),tab=$state<'files'|'conversions'>('files');
+  const conversionEntry=$derived(conversions.find(job=>job.id===activeConversion)?.entry);
+  const converting=$derived(conversions.some(job=>job.status==='Converting'||job.status==='Queued'||job.status==='Saving encrypted copy'));
+  let creating=$state(false),createName=$state(''),createPassword=$state(''),createConfirm=$state(''),createParent=$state<FileSystemDirectoryHandle>(),creationController:AbortController|undefined;
+  let backgroundMinutes=$state(1),keepDuringConversions=$state(false);
   let source = $state<Source>();
   let editor=$state<{dirty:boolean;saving:boolean;discard:()=>void}|undefined>(),savingText=$state(false);
   let textSaveController:AbortController|undefined;
-  let conversionEntry=$state<VaultEntry>(),convertingSave=$state(false),selecting=$state(false),selectionAnchor:string|undefined;
+  let convertingSave=$state(false),selecting=$state(false),selectionAnchor:string|undefined;
   let client = $state<VaultClient>();
   let info = $state<VaultInfo>();
   let unlocked = $state(false), busy = $state(false), loading = $state(false), password = $state(''), progress = $state(0);
@@ -44,7 +51,6 @@
   let manager=$state<{action:FileAction;targets:VaultEntry[]}>(),mutating=$state(false),menu=$state(''),marked=$state<string[]>([]);
   let mutationController:AbortController|undefined;
   let breadcrumbs = $state<{ name:string; id:string }[]>([{ name:'All files',id:'' }]);
-  let visited = $state<{ name:string; id:string; ancestors:{ name:string; id:string }[] }[]>([]);
   let folderPicker:HTMLInputElement;
   let importPicker:HTMLInputElement;
   let folderImportPicker:HTMLInputElement;
@@ -56,7 +62,6 @@
   const currentDirectory = $derived(breadcrumbs.at(-1)!.id);
   const resolvedTheme = $derived(theme === 'system' ? (systemDark ? 'dark' : 'light') : theme);
   const browsable = $derived(entries.filter(entry=>!hideDotfiles || !entry.name.startsWith('.')));
-  const visibleFolders = $derived(visited.filter(folder=>!hideDotfiles || !folder.name.startsWith('.')));
   const visible = $derived(browsable.filter(entry=>entry.name.toLowerCase().includes(search.toLowerCase()) && (filter === 'all' || entry.kind === 'folder' || entry.kind === filter)).toSorted((a,b)=>{
     if (a.kind === 'folder' && b.kind !== 'folder') return -1;
     if (b.kind === 'folder' && a.kind !== 'folder') return 1;
@@ -72,7 +77,7 @@
   function message(e:unknown):string { return e instanceof Error ? e.message : 'Something went wrong. Please try again.'; }
   function currentView():AppView {
     if(!unlocked)return {kind:'locked'};
-    return {kind:'vault',breadcrumbs:breadcrumbs.map(({name,id})=>({name,id})),selectedId:selected?.id,expanded,settings,filter,search,sort,view,scroll:explorerContent?.scrollTop ?? 0};
+    return {kind:'vault',breadcrumbs:breadcrumbs.map(({name,id})=>({name,id})),selectedId:selected?.id,expanded,settings,filter,search,sort,view,tab,scroll:explorerContent?.scrollTop ?? 0};
   }
   function rememberView() {appHistory?.update(currentView());}
   function pushView() {appHistory?.push(currentView());}
@@ -83,7 +88,7 @@
     editor?.discard();editor=undefined;return true;
   }
   function canRestoreView(target:AppView|undefined):boolean {
-    return !conversionEntry&&target?.kind==='vault'&&target.selectedId===selected?.id&&target.breadcrumbs.at(-1)?.id===currentDirectory&&!savingText || canLeaveEditor();
+    return !conversionEntry&&target?.kind==='vault'&&target.tab===tab&&target.selectedId===selected?.id&&target.breadcrumbs.at(-1)?.id===currentDirectory&&!savingText || canLeaveEditor();
   }
   async function restoreView(target:AppView|undefined) {
     closeManager();menu='';marked=[];
@@ -96,7 +101,7 @@
       if(!await navigate(target.breadcrumbs,'restore'))return;
     } else {navigation++;loading=false;}
     const ticket=navigation;
-    filter=target.filter;search=target.search;sort=target.sort;view=target.view;settings=target.settings;
+    tab=target.tab;filter=target.filter;search=target.search;sort=target.sort;view=target.view;settings=target.settings;
     selected=entries.find(entry=>entry.id===target.selectedId && entry.kind!=='folder' && (!hideDotfiles || !entry.name.startsWith('.')));
     expanded=Boolean(selected && target.expanded);activity();
     await tick();if(ticket===navigation && explorerContent)explorerContent.scrollTop=target.scroll;
@@ -113,7 +118,7 @@
     if(appHistory?.backIf(target=>target.kind==='vault' && target.breadcrumbs.at(-1)!.id===currentDirectory && target.selectedId===selected?.id && !target.settings))return;
     settings=false;pushView();
   }
-  function chooseFilter(next:string) {if(next===filter)return;rememberView();filter=next;pushView();}
+  function chooseFilter(next:string) {if(next===filter&&tab==='files')return;rememberView();tab='files';filter=next;pushView();}
   function toggleExpanded() {expanded=!expanded;rememberView();}
   async function prepareStreaming() {
     const ticket=++streamAttempt;streamingPending=true;
@@ -122,19 +127,20 @@
   }
   async function refreshRecents() { try { recents = (await getRecents()).toSorted((a,b)=>b.opened-a.opened).slice(0,6); } catch { /* Storage is optional. */ } }
   function clearSession() {
-    navigation++; authController?.abort(); importController?.abort(); mutationController?.abort();textSaveController?.abort();client?.close(); client=undefined;
-    editor=undefined;savingText=false;textSaveController=undefined;conversionEntry=undefined;convertingSave=false;selecting=false;selectionAnchor=undefined;
+    navigation++; creationController?.abort();creationController=undefined;createPassword=createConfirm='';authController?.abort(); importController?.abort(); mutationController?.abort();textSaveController?.abort();client?.close(); client=undefined;
+    editor=undefined;savingText=false;textSaveController=undefined;conversions=[];activeConversion='';tab='files';convertingSave=false;selecting=false;selectionAnchor=undefined;
     clearThumbnailCache();stopMedia(); unlocked=false; entries=[]; selected=undefined; expanded=false; password=''; progress=0;
-    breadcrumbs=[{ name:'All files',id:'' }]; visited=[]; warnings=[]; busy=false; loading=false; settings=false; search=''; filter='all'; importing=false; importProgress=0; importName='';
+    breadcrumbs=[{ name:'All files',id:'' }]; warnings=[]; busy=false; loading=false; settings=false; search=''; filter='all'; importing=false; importProgress=0; importName='';
     manager=undefined;mutating=false;scanningImport=false;menu='';marked=[];mutationController=undefined;
     appHistory?.reset({kind:'locked'});
     clearTimeout(idleTimer); clearTimeout(hiddenTimer);
   }
   function lock() { clearSession(); notice='Vault locked. Your previews and session keys have been cleared.'; error=''; }
-  function closeVault() { if(!canLeaveEditor())return;clearSession(); source=undefined; info=undefined; passkey=undefined; error=''; notice=''; }
+  function closeVault() { if(!canLeaveEditor())return;creating=false;createParent=undefined;createName='';clearSession(); source=undefined; info=undefined; passkey=undefined; error=''; notice=''; }
   function activity() {
     if (!unlocked) return;
     clearTimeout(idleTimer);
+    if(keepDuringConversions&&converting)return;
     if (idleMinutes > 0) idleTimer=setTimeout(lock,idleMinutes*60000);
   }
   async function loadSource(next:Source) {
@@ -147,6 +153,29 @@
       try { const saved=await getPasskey(result.id); if (client === active) passkey=saved; } catch { /* Password unlock works without storage. */ }
     } catch (e) { if (client === active) { error=message(e); active.close(); client=undefined; source=undefined; } }
     finally { if (client === active || !client) busy=false; }
+  }
+  function startCreation(){navigation++;creating=true;error=notice='';createPassword=createConfirm='';}
+  async function chooseCreationLocation(){
+    if(!window.showDirectoryPicker)return;
+    try{createParent=await window.showDirectoryPicker({mode:'readwrite',id:'crypte-create'});error='';}
+    catch(e){if(!(e instanceof DOMException&&e.name==='AbortError'))error=message(e);}
+  }
+  async function createVault(event:SubmitEvent){
+    event.preventDefault();if(busy||!createParent)return;
+    if(!createPassword||createPassword.normalize('NFC')!==createConfirm.normalize('NFC')){error='Passwords must match.';return;}
+    const input=createPassword;createPassword=createConfirm='';busy=true;error=notice='';progress=0;
+    const active=new VaultClient(),controller=new AbortController();creationController=controller;
+    let created:FileSystemDirectoryHandle|undefined;
+    try{
+      const bootstrap=await active.generate(input,p=>progress=p);controller.signal.throwIfAborted();
+      created=await persistVault(createParent,createName,bootstrap,controller.signal);controller.signal.throwIfAborted();
+      // The completed vault survives optional browser-storage or unlock failures.
+      creationController=undefined;await loadSource({type:'handle',handle:created});creating=false;
+      if(!client||!info)throw new Error('Vault saved. Select its folder to open it.');
+      busy=true;const session=client;await session.unlock(input);await finishUnlock(session);
+      if(!notice)notice='Vault created and saved to your chosen folder.';
+    }catch(e){if(!controller.signal.aborted)error=(created?'Vault saved on disk. ':'')+message(e);}
+    finally{active.close();if(creationController===controller)creationController=undefined;busy=false;}
   }
   async function chooseVault() {
     navigation++; error='';
@@ -235,15 +264,13 @@
     if(mode!=='restore'&&!canLeaveEditor())return false;
     const changed=next.at(-1)!.id!==currentDirectory || Boolean(selected) || Boolean(search);
     if(mode!=='restore')rememberView();
-    const active=client, ticket=++navigation; loading=true; error=''; selected=undefined; expanded=false; search='';marked=[];selecting=false;selectionAnchor=undefined;menu='';
+    const wasConversions=tab==='conversions';tab='files';const active=client, ticket=++navigation; loading=true; error=''; selected=undefined; expanded=false; search='';marked=[];selecting=false;selectionAnchor=undefined;menu='';
     try {
       const listing=await active.list(next.at(-1)!.id);
       if (client !== active || ticket !== navigation) return false;
       breadcrumbs=next; entries=listing.entries; warnings=listing.warnings;
-      const last=next.at(-1)!;
-      if (last.id && !visited.some(v=>v.id === last.id)) visited=[...visited,{ ...last,ancestors:next }];
       if(mode!=='restore' && explorerContent)explorerContent.scrollTop=0;
-      if(mode==='push' && changed)pushView();else if(mode==='replace' || mode==='push')rememberView();
+      if(mode==='push' && (changed||wasConversions))pushView();else if(mode==='replace' || mode==='push')rememberView();
       return true;
     } catch (e) { if (client === active && ticket === navigation) error=message(e); }
     finally { if (ticket === navigation) loading=false; activity(); }
@@ -306,26 +333,29 @@
     marked=marked.includes(entry.id)?marked.filter(id=>id!==entry.id):[...marked,entry.id];selectionAnchor=entry.id;
   }
   function activateEntry(event:MouseEvent,entry:VaultEntry){if(source?.type==='handle'&&(selecting||event.metaKey||event.ctrlKey||event.shiftKey)){if(!writeDisabled)mark(entry,event);}else select(entry);}
+  function chooseTab(next:'files'|'conversions'){if(tab===next||!canLeaveEditor())return;rememberView();tab=next;pushView();}
   async function entryAction(action:FileAction|'convert',entry:VaultEntry){
     if(action!=='convert'){openManager(action,[entry]);return;}
     if(writeDisabled||!canLeaveEditor()||source?.type!=='handle')return;menu='';error='';
-    const active=client;try{await writePermission(source.handle);if(client===active)conversionEntry=entry;}catch(e){error=message(e);}
+    const active=client;try{await writePermission(source.handle);if(client===active){const pending=conversions.find(job=>job.entry.id===entry.id);if(pending)activeConversion=pending.id;else{if(conversions.length>=8)throw new Error('Review or cancel a pending conversion before adding more.');const id=crypto.randomUUID();conversions.push({id,entry,parentId:currentDirectory,crumbs:breadcrumbs.map(crumb=>({...crumb})),status:'Preparing',progress:0});activeConversion=id;}}}catch(e){error=message(e);}
   }
-  async function commitConversion(result:ConvertedMedia,remove:boolean,stamp:Awaited<ReturnType<typeof sourceStamp>>,signal:AbortSignal){
-    if(source?.type!=='handle'||!client||!info||!conversionEntry)throw new Error('The vault is locked.');
-    const active=client,root=source.handle,original=conversionEntry,parentId=currentDirectory,vaultId=info.id;convertingSave=true;busy=true;
+  async function commitConversion(job:ConversionJob,result:ConvertedMedia,remove:boolean,stamp:Awaited<ReturnType<typeof sourceStamp>>,signal:AbortSignal){
+    if(source?.type!=='handle'||!client||!info)throw new Error('The vault is locked.');
+    const active=client,root=source.handle,original=job.entry,parentId=job.parentId,vaultId=info.id;convertingSave=true;busy=true;
     try{
       await vaultWriteLock(vaultId,signal,async()=>{
         if(remove){const fresh=await sourceStamp(root,original,signal);if(fresh.digest!==stamp.digest||fresh.modified!==stamp.modified)throw new Error('The original changed during conversion. It has been kept.');}
         const saved=await addFile(root,active,{name:result.name,size:result.spool.size,read:(start,end)=>result.spool.read(start,end)},parentId,signal,()=>{});
-        if(remove){const fresh=await sourceStamp(root,original,signal);if(fresh.digest!==stamp.digest||fresh.modified!==stamp.modified)throw new Error('The original changed while saving. Both files have been kept.');const outcome=await executeWriteUnlocked(root,active,{kind:'delete',parentId,entryId:original.id},signal);if(client===active)reconcileHistory(outcome,[...breadcrumbs]);}
+        if(remove){const fresh=await sourceStamp(root,original,signal);if(fresh.digest!==stamp.digest||fresh.modified!==stamp.modified)throw new Error('The original changed while saving. Both files have been kept.');const outcome=await executeWriteUnlocked(root,active,{kind:'delete',parentId,entryId:original.id},signal);if(client===active)reconcileHistory(outcome,job.crumbs);}
         if(client===active)notice=remove?`Saved ${saved} and removed the original.`:`Saved ${saved}. The original has been kept.`;
       });
     }finally{
-      if(client===active){convertingSave=false;busy=false;const listing=await active.list(parentId);if(client===active){entries=listing.entries;warnings=listing.warnings;if(remove)selected=undefined;activity();}}
+      if(client===active){convertingSave=false;busy=false;const listing=await active.list(parentId);if(client===active&&currentDirectory===parentId){entries=listing.entries;warnings=listing.warnings;if(remove)selected=undefined;activity();}}
     }
   }
-  function closeConversion(){conversionEntry=undefined;convertingSave=false;activity();}
+  function removeConversion(id:string){conversions=conversions.filter(job=>job.id!==id);if(activeConversion===id)activeConversion='';activity();}
+  function closeConversion(){removeConversion(activeConversion);}
+  function backgroundConversion(){activeConversion='';chooseTab('conversions');activity();}
 
   function openManager(action:FileAction,targets:VaultEntry[]=[]) {if(writeDisabled)return;menu='';manager={action,targets};}
   function closeManager(){mutationController?.abort();manager=undefined;}
@@ -345,7 +375,10 @@
       const crumbs=updateCrumbs(route.breadcrumbs),changed=crumbs.length!==route.breadcrumbs.length;
       return {...route,breadcrumbs:crumbs,selectedId:changed||route.selectedId===plan.entry?.id?undefined:route.selectedId,expanded:changed||route.selectedId===plan.entry?.id?false:route.expanded};
     });
-    visited=visited.filter(folder=>!removed.has(folder.id)).map(folder=>{const ancestors=updateCrumbs(folder.ancestors);return {...folder,name:ancestors.at(-1)!.name,ancestors};});
+    // Preserve conversion destinations through folder moves; cancel jobs whose source is removed.
+    for(const job of conversions)job.crumbs=updateCrumbs(job.crumbs);
+    const cancelled=conversions.filter(job=>removed.has(job.parentId)||(plan.kind==='delete'||plan.kind==='move')&&job.entry.id===plan.entry?.id);
+    for(const job of cancelled)removeConversion(job.id);
   }
   async function confirmActions(input:ActionInput) {
     if(!manager||!client||!info||source?.type!=='handle'||mutating)return;
@@ -419,32 +452,36 @@
       const savedTheme=localStorage.getItem('crypte-theme');
       theme=savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'system';
       hideDotfiles=localStorage.getItem('crypte-hide-dotfiles') !== 'false';
-      const idle=Number(localStorage.getItem('crypte-idle') ?? '5'); idleMinutes=[1,5,15,0].includes(idle) ? idle : 5;
+      const idle=Number(localStorage.getItem('crypte-idle') ?? '5'); idleMinutes=Number.isFinite(idle)&&idle>=0&&idle<=1440 ? idle : 5;
+      const background=Number(localStorage.getItem('crypte-background-idle')??'1');backgroundMinutes=Number.isFinite(background)&&background>=0&&background<=1440?background:1;
+      keepDuringConversions=localStorage.getItem('crypte-keep-converting')==='true';
     } catch { /* Optional preferences. */ }
     const startup=navigation;
     void refreshRecents().then(async()=>{
       const recent=recents[0];
-      if (startup !== navigation || source || !recent?.handle) return;
+      if (startup !== navigation || creating || source || !recent?.handle) return;
       try {
         const permission=await recent.handle.queryPermission({ mode:'read' });
-        if (permission === 'granted' && startup === navigation && !source) await loadSource({ type:'handle',handle:recent.handle });
+        if (permission === 'granted' && startup === navigation && !creating && !source) await loadSource({ type:'handle',handle:recent.handle });
       } catch { /* A revoked/unavailable handle can be reopened from the recent list. */ }
     });
     const controlled=async()=>{const ticket=streamAttempt;if(mediaStreamingReady()&&await probeMediaStreaming()&&ticket===streamAttempt){streamAttempt++;streaming=true;streamingPending=false;streamingError='';}};
     navigator.serviceWorker?.addEventListener('controllerchange',controlled);
     void passkeysAvailable().then(value=>biometricAvailable=value);void prepareStreaming();
-    const hidden=()=>{ clearTimeout(hiddenTimer); if (document.hidden && unlocked) hiddenTimer=setTimeout(lock,60000); else activity(); };
+    const hidden=()=>scheduleBackgroundLock();
     const exit=()=>clearSession();
     document.addEventListener('visibilitychange',hidden); window.addEventListener('pagehide',exit);
-    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||convertingSave){event.preventDefault();event.returnValue='';}};
+    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy){event.preventDefault();event.returnValue='';}};
     window.addEventListener('beforeunload',beforeExit);
     return ()=>{streamAttempt++;navigator.serviceWorker?.removeEventListener('controllerchange',controlled);appearance.removeEventListener('change',updateAppearance); document.removeEventListener('visibilitychange',hidden); window.removeEventListener('pagehide',exit);window.removeEventListener('beforeunload',beforeExit); clearSession();appHistory?.destroy();appHistory=undefined; };
   });
   $effect(()=>{document.documentElement.dataset.theme=resolvedTheme;});
   $effect(()=>{
-    try { localStorage.setItem('crypte-theme',theme); localStorage.setItem('crypte-idle',String(idleMinutes)); localStorage.setItem('crypte-hide-dotfiles',String(hideDotfiles)); } catch { /* Optional preferences. */ }
-    activity();
+    try { localStorage.setItem('crypte-theme',theme); localStorage.setItem('crypte-idle',String(idleMinutes)); localStorage.setItem('crypte-hide-dotfiles',String(hideDotfiles));localStorage.setItem('crypte-background-idle',String(backgroundMinutes));localStorage.setItem('crypte-keep-converting',String(keepDuringConversions)); } catch { /* Optional preferences. */ }
+    activity();scheduleBackgroundLock();
   });
+  function scheduleBackgroundLock(){clearTimeout(hiddenTimer);if(document.hidden&&unlocked&&backgroundMinutes>0&&!(keepDuringConversions&&converting))hiddenTimer=setTimeout(lock,backgroundMinutes*60000);}
+  $effect(()=>{void converting;void keepDuringConversions;void idleMinutes;void backgroundMinutes;untrack(()=>{activity();scheduleBackgroundLock();});});
   $effect(()=>{ if (hideDotfiles && selected?.name.startsWith('.')) { selected=undefined; expanded=false;untrack(rememberView); } });
   $effect(()=>{const ids=new Set(browsable.map(entry=>entry.id));if(marked.some(id=>!ids.has(id)))marked=marked.filter(id=>ids.has(id));});
 </script>
@@ -461,18 +498,30 @@
       <section class="welcome-story">
         <div class="eyebrow"><span class="tiny-line"></span>LOCAL VAULT MANAGER</div>
         <h1>Cryptomator<br/>vault manager.</h1>
-        <p class="welcome-description">Open an encrypted vault to organize files and preview text, images, audio, and video.</p>
+        <p class="welcome-description">Create or open an encrypted vault to organize files and preview text, images, audio, and video.</p>
         <div class="vault-illustration" aria-hidden="true"><div class="illustration-orbit orbit-one"></div><div class="illustration-orbit orbit-two"></div><div class="floating-card floating-photo"><svg viewBox="0 0 140 110"><rect width="140" height="110" rx="8" fill="#e3e6d7"/><circle cx="104" cy="29" r="13" fill="#c8d3ae"/><path d="M0 105l44-68 40 56 25-33 31 45" fill="#5c7566"/><path d="M44 37l-11 17 22-1" fill="#f9faf5"/></svg></div><div class="illustrated-vault"><div class="vault-handle"><Icon name="lock" size={50}/></div><span>ENCRYPTED VAULT</span></div><div class="floating-card floating-text"><div></div><div></div><div></div><div></div></div><span class="illustration-spark spark-one">✳</span><span class="illustration-spark spark-two">+</span></div>
         <div class="privacy-points"><span><Icon name="shield" size={18}/>Never uploaded</span><span><Icon name="folder" size={18}/>Local folder access</span><span><Icon name="cloud" size={18}/>No account needed</span></div>
       </section>
       <section class="unlock-card">
         <div class="card-eyebrow">{info ? 'LOCKED VAULT' : 'OPEN VAULT'}</div>
         <div class="unlock-emblem"><Icon name={info ? 'lock' : 'folder'} size={28}/></div>
-        <h2>{info ? info.name : 'Open a vault'}</h2>
-        <p>{info ? 'Enter your password to browse the vault.' : 'Choose the folder that contains your encrypted Cryptomator vault.'}</p>
+        <h2>{creating?'Create a vault':info ? info.name : 'Open a vault'}</h2>
+        <p>{creating?'Choose a name, location and password for your new vault.':info ? 'Enter your password to browse the vault.' : 'Choose the folder that contains your encrypted Cryptomator vault.'}</p>
         {#if error}<div class="error-banner" role="alert">{error}</div>{/if}
         {#if notice}<div class="notice-banner" role="status">{notice}</div>{/if}
-        {#if info}
+        {#if creating}
+          <form onsubmit={createVault} class="create-vault-form">
+            <label class="input-label" for="create-name">Vault name</label><input id="create-name" bind:value={createName} required disabled={busy} placeholder="My vault"/>
+            <button type="button" class="secondary-button" onclick={chooseCreationLocation} disabled={busy}>Choose vault location</button>
+            <p class="setting-note">{createParent?`New folder: ${createParent.name} / ${createName||'My vault'}`:'The encrypted vault will be saved in a new folder at this location.'}</p>
+            <label class="input-label" for="create-password">New vault password</label><input id="create-password" type="password" bind:value={createPassword} autocomplete="new-password" required disabled={busy}/>
+            <label class="input-label" for="create-confirm">Confirm vault password</label><input id="create-confirm" type="password" bind:value={createConfirm} autocomplete="new-password" required disabled={busy}/>
+            <p class="setting-note">Keep your password safe. Crypte cannot recover a forgotten password.</p>
+            <label class="remember-option"><input type="checkbox" bind:checked={remember} disabled={busy}/>Remember this vault on this device</label>
+            <button class="primary-button" type="submit" disabled={busy||!createParent||!createName||!createPassword||!createConfirm}>{busy?`Creating vault… ${Math.round(progress*100)}%`:'Create vault'}</button>
+          </form>
+          <button class="text-button choose-another" disabled={busy} onclick={()=>{creating=false;createPassword=createConfirm='';error='';}}>Cancel</button>
+        {:else if info}
           {#if passkey}<button class="primary-button passkey-unlock" onclick={unlockWithPasskey} disabled={busy}><Icon name="fingerprint"/>{busy ? 'Unlocking…' : 'Unlock with passkey'}</button><div class="or-divider"><span>or use your vault password</span></div>{/if}
           <form onsubmit={unlockPassword}>
             <label class="input-label" for="vault-password">Vault password</label><div class="password-input"><Icon name="lock" size={17}/><input id="vault-password" type="password" bind:value={password} autocomplete="current-password" placeholder="Enter your password" disabled={busy}/></div>
@@ -483,6 +532,8 @@
           <div class="vault-format">Format {info.format} <span>·</span> {info.cipherCombo}</div>
         {:else}
           <button class="primary-button" onclick={chooseVault} disabled={busy}><Icon name="folder" size={19}/>{busy ? 'Opening…' : 'Choose vault folder'}<Icon name="arrow" size={18}/></button>
+          <button class="secondary-button create-vault-button" onclick={startCreation} disabled={busy||!window.showDirectoryPicker}>Create new vault<Icon name="plus" size={18}/></button>
+          {#if !window.showDirectoryPicker}<p class="setting-note">Vault creation requires a browser with native folder access, such as Chrome or Edge.</p>{/if}
           {#if recents.length}<div class="recent-vaults"><div class="input-label">RECENT VAULTS</div>{#each recents as recent}<div class="recent-row"><button onclick={()=>reopen(recent)} disabled={busy}><Icon name="clock" size={17}/><span>{recent.name}</span><Icon name="chevron" size={15}/></button><button class="icon-button" title={`Forget ${recent.name}`} onclick={async()=>{ await forgetVault(recent.id); await refreshRecents(); }}><Icon name="close" size={14}/></button></div>{/each}</div>{/if}
         {/if}
         <div class="unlock-footnote"><Icon name="shield" size={15}/><span>Your password and files stay on this device.</span></div>
@@ -496,15 +547,22 @@
     <div class="app-body">
       <aside class="sidebar">
         <div class="sidebar-section-label">YOUR VAULT</div>
-        <button class="sidebar-link" class:active={currentDirectory === ''} onclick={()=>navigate([{ name:'All files',id:'' }])}><Icon name="folder" size={18}/>All files<span>{browsable.length}</span></button>
+        <button class="sidebar-link" class:active={tab==='files'&&currentDirectory === ''} onclick={()=>navigate([{ name:'All files',id:'' }])}><Icon name="folder" size={18}/>All files<span>{browsable.length}</span></button>
         <button class="sidebar-link" class:active={filter === 'image'} onclick={()=>chooseFilter(filter === 'image' ? 'all' : 'image')}><Icon name="image" size={18}/>Pictures</button>
         <button class="sidebar-link" class:active={filter === 'video'} onclick={()=>chooseFilter(filter === 'video' ? 'all' : 'video')}><Icon name="video" size={18}/>Videos</button>
         <button class="sidebar-link" class:active={filter === 'text'} onclick={()=>chooseFilter(filter === 'text' ? 'all' : 'text')}><Icon name="text" size={18}/>Documents</button>
-        {#if visibleFolders.length}<div class="sidebar-section-label folders-label">OPENED FOLDERS</div>{#each visibleFolders as folder}<button class="sidebar-link" class:active={currentDirectory === folder.id} onclick={()=>navigate(folder.ancestors)}><Icon name="folder" size={17}/><span class="folder-name">{folder.name}</span></button>{/each}{/if}
+        <button class="sidebar-link" class:active={tab==='conversions'} aria-label="Conversions" onclick={()=>chooseTab('conversions')}><Icon name="refresh" size={18}/>Conversions<span>{conversions.length}</span></button>
         <div class="sidebar-bottom"><div class="privacy-card"><Icon name="shield" size={23}/><h3>Local encryption</h3><p>Files are decrypted for previews and encrypted before being added to the vault.</p></div><button class="sidebar-link open-another" onclick={chooseVault} disabled={importing||scanningImport||mutating}><Icon name="plus" size={17}/>Open another vault</button></div>
       </aside>
-      <main class="explorer" class:has-preview={selected} class:preview-expanded={expanded}>
+      <main class="explorer" class:has-preview={selected} class:preview-expanded={expanded&&tab==='files'}>
         <div class="explorer-content" bind:this={explorerContent}>
+          {#if tab==='conversions'}
+            <div class="explorer-heading"><div><div class="eyebrow">PENDING JOBS</div><h1>Conversions</h1><p>{conversions.length} pending</p></div></div>
+            <p class="preview-note">Conversions stay available while you browse. Locking or closing the vault cancels jobs and discards unsaved results.</p>
+            {#if notice}<div class="notice-banner" role="status">{notice}</div>{/if}
+            {#if !conversions.length}<div class="files-empty"><Icon name="refresh" size={44}/><h2>No pending conversions</h2><p>Choose Convert from an image, video or audio file’s menu.</p></div>{/if}
+            {#each conversions as job (job.id)}<div class="conversion-job"><div><h2>{job.entry.name}</h2><p>{job.status}{job.status==='Converting'?` · ${Math.round(job.progress*100)}%`:''}</p>{#if job.status==='Converting'}<progress max="1" value={job.progress} aria-label={`Converting ${job.entry.name}`}></progress>{/if}</div><div><button class="small-button" disabled={busy} onclick={()=>{if(canLeaveEditor())activeConversion=job.id;}}>{job.status==='Ready for review'?'Review':'Open'}</button><button class="small-button" disabled={convertingSave} onclick={()=>removeConversion(job.id)}>Cancel</button></div></div>{/each}
+          {:else}
           <nav class="breadcrumbs" aria-label="Breadcrumb">{#each breadcrumbs as crumb,index}{#if index}<Icon name="chevron" size={13}/>{/if}<button onclick={()=>navigate(breadcrumbs.slice(0,index+1))}>{index === 0 ? info.name : crumb.name}</button>{/each}</nav>
           <div class="explorer-heading"><div><div class="eyebrow">FILES AND FOLDERS</div><h1>{currentDirectory === '' ? 'All files' : breadcrumbs.at(-1)!.name}</h1><p>{fileCount} {fileCount === 1 ? 'file' : 'files'}{folderCount ? ` · ${folderCount} ${folderCount === 1 ? 'folder' : 'folders'}` : ''}</p></div><div class="heading-actions"><button class="small-button" onclick={chooseImport} disabled={writeDisabled} title={source?.type === 'handle' ? 'Add files to this folder' : 'Adding files requires native folder access in a compatible browser'}><Icon name="plus" size={16}/>Add files</button><button class="small-button" onclick={chooseFolderImport} disabled={writeDisabled}><Icon name="folder" size={16}/>Add folder</button><button class="small-button" onclick={()=>openManager('mkdir')} disabled={writeDisabled}><Icon name="plus" size={16}/>New folder</button><button class="icon-button refresh-button" title="Refresh folder" disabled={loading || importing || scanningImport || mutating} onclick={()=>navigate([...breadcrumbs],'replace')}><Icon name="refresh"/></button></div></div>
           {#if error}<div class="error-banner" role="alert">{error}</div>{/if}
@@ -525,14 +583,15 @@
             <EntryActions {entry} open={menu===entry.id} disabled={writeDisabled} marked={marked.includes(entry.id)} {selecting} ontoggle={()=>menu=menu===entry.id?'':entry.id} onmark={()=>mark(entry)} onaction={action=>entryAction(action,entry)}/>
           </div>{/each}</div>{/if}
           <div class="explorer-footer"><span><Icon name="shield" size={14}/>{source?.type === 'handle' ? 'Local vault' : 'Read-only vault'}</span><span>{streaming ? 'Media streaming ready' : streamingPending ? 'Starting media streaming' : 'In-memory previews'}<span class="status-dot"></span></span></div>
+          {/if}
         </div>
-        {#if selected}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} onsave={saveEditedText} oneditstate={state=>editor=state}/>{/key}{/if}
+        {#if selected&&tab==='files'}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} onsave={saveEditedText} oneditstate={state=>editor=state}/>{/key}{/if}
       </main>
     </div>
   </div>
 {/if}
 
-{#if conversionEntry && unlocked && client && source?.type==='handle'}<ConversionDialog entry={conversionEntry} {client} root={source.handle} {streaming} onclose={closeConversion} onlock={lock} oncommit={commitConversion}/>{/if}
+{#if unlocked && client && source?.type==='handle'}{#each conversions as job (job.id)}<ConversionDialog entry={job.entry} {client} root={source.handle} {streaming} active={activeConversion===job.id} onstatus={(status,progress)=>{job.status=status;job.progress=progress;}} onbackground={backgroundConversion} onclose={()=>removeConversion(job.id)} onlock={lock} oncommit={(result,remove,stamp,signal)=>commitConversion(job,result,remove,stamp,signal)}/>{/each}{/if}
 
 {#if manager && unlocked && client && info}<FileActionsDialog action={manager.action} targets={manager.targets} {client} vaultName={info.name} parentId={currentDirectory} {hideDotfiles} busy={mutating} onconfirm={confirmActions} oncancel={closeManager}/>{/if}
 
@@ -542,7 +601,10 @@
       <div class="dialog-heading"><div><span class="card-eyebrow">VAULT SETTINGS</span><h2>Preferences</h2></div><button class="icon-button" title="Close preferences" onclick={dismissSettings}><Icon name="close"/></button></div>
       <div class="setting-group"><div class="setting-icon"><Icon name="fingerprint" size={24}/></div><div><h3>Unlock with a passkey</h3><p>Use Touch ID or your platform authenticator. Your vault keys are encrypted with a key from your passkey and stored in this browser.</p>{#if passkey}<span class="enabled-label"><Icon name="check" size={15}/>Enabled on this app address</span><button class="secondary-button" onclick={removePasskey} disabled={busy}>Remove local unlock</button>{:else}<button class="primary-button" onclick={enrollPasskey} disabled={busy || !biometricAvailable}>{busy ? 'Setting up…' : 'Set up passkey'}<Icon name="fingerprint" size={17}/></button>{#if !biometricAvailable}<p class="setting-note">A compatible platform authenticator is unavailable. Password unlock remains available.</p>{/if}{/if}</div></div>
       {#if error}<div class="error-banner" role="alert">{error}</div>{/if}{#if notice}<div class="notice-banner" role="status">{notice}</div>{/if}
-      <div class="setting-row"><div><h3>Auto-lock</h3><p>Lock after inactivity. Background tabs lock after one minute.</p></div><select aria-label="Auto-lock timeout" bind:value={idleMinutes}><option value={1}>1 minute</option><option value={5}>5 minutes</option><option value={15}>15 minutes</option><option value={0}>Manual</option></select></div>
+      <div class="setting-row"><div><h3>Auto-lock</h3><p>Minutes without interaction. Use 0 for manual locking.</p></div><input type="number" min="0" max="1440" step="0.5" aria-label="Auto-lock timeout" bind:value={idleMinutes}/></div>
+      <div class="setting-row"><div><h3>Background lock</h3><p>Minutes after hiding this tab. Use 0 to disable.</p></div><input type="number" min="0" max="1440" step="0.5" aria-label="Background lock timeout" bind:value={backgroundMinutes}/></div>
+      <div class="setting-row"><div><h3>Keep unlocked during conversions</h3><p>Pause automatic locking while converting or saving. Manual locking always cancels jobs.</p></div><input type="checkbox" aria-label="Keep unlocked during conversions" bind:checked={keepDuringConversions}/></div>
+      <div class="setting-row"><div><h3>Session ends</h3><p>Closing or reloading always locks the vault and clears unsaved work.</p></div></div>
       <div class="setting-row"><div><h3>Hide dotfiles</h3><p>Hide files and folders whose names start with a dot.</p></div><input type="checkbox" aria-label="Hide dotfiles" bind:checked={hideDotfiles}/></div>
       <div class="setting-row"><div><h3>Appearance</h3><p>System follows your device’s light or dark appearance.</p></div><select aria-label="Appearance" bind:value={theme}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
       <p class="dialog-footnote">Passkeys are tied to this app’s address and browser storage. Keep your vault password for recovery.</p>

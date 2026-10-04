@@ -1,6 +1,6 @@
 import { aessiv } from '@noble/ciphers/aes.js';
 import { scryptAsync } from '@noble/hashes/scrypt.js';
-import { base32, concat, digest, fromBase64, random, text, toBase64, u64, utf8, type Bytes } from './bytes';
+import { base32, concat, digest, fromBase64, random, text, toBase64, toBase64Url, u64, utf8, type Bytes } from './bytes';
 import type { CipherCombo } from './types';
 
 export const CLEAR_CHUNK = 32768;
@@ -12,6 +12,29 @@ export interface VaultConfiguration { format: 8; cipherCombo: CipherCombo; jti: 
 export interface ParsedConfiguration { token: string; keyPath: string; payload: VaultConfiguration; signatureHash:'SHA-256'|'SHA-384'|'SHA-512'; }
 export interface Material { raw: Bytes; siv: Bytes; enc: CryptoKey; mac: CryptoKey; combo: CipherCombo; }
 export interface FileHeader { nonce: Bytes; key: CryptoKey; }
+export interface VaultBootstrap { masterkey:string; configuration:string; rootPath:string; backup:Bytes; }
+/** Runs in the vault worker. Only wrapped keys and encrypted metadata leave it. */
+export async function generateVault(password:string,onProgress?:(p:number)=>void):Promise<VaultBootstrap> {
+  if (!password) throw new Error('Choose a vault password.');
+  const raw=random(64),salt=random(8),passwordBytes=utf8(password.normalize('NFC'));
+  let kekBytes:Bytes|undefined,material:Material|undefined;
+  try {
+    material=await createMaterial(raw,'SIV_GCM');
+    kekBytes=new Uint8Array(await scryptAsync(passwordBytes,salt,{N:32768,r:8,p:1,dkLen:32,maxmem:256*1024*1024,onProgress}));
+    const kek=await crypto.subtle.importKey('raw',kekBytes,'AES-KW',false,['wrapKey']);
+    const wrap=async(bytes:Bytes)=>{
+      const key=await crypto.subtle.importKey('raw',bytes,'AES-CTR',true,['encrypt']);
+      return toBase64(new Uint8Array(await crypto.subtle.wrapKey('raw',key,kek,'AES-KW')));
+    };
+    const version=new Uint8Array(4);new DataView(version.buffer).setUint32(0,999);
+    const masterkey=JSON.stringify({version:999,scryptSalt:toBase64(salt),scryptCostParam:32768,scryptBlockSize:8,primaryMasterKey:await wrap(raw.subarray(0,32)),hmacMasterKey:await wrap(raw.subarray(32)),versionMac:toBase64(new Uint8Array(await crypto.subtle.sign('HMAC',material.mac,version)))},null,2);
+    const header=toBase64Url(utf8(JSON.stringify({alg:'HS256',kid:'masterkeyfile:masterkey.cryptomator'})));
+    const payload=toBase64Url(utf8(JSON.stringify({jti:crypto.randomUUID(),format:8,cipherCombo:'SIV_GCM',shorteningThreshold:220})));
+    const signingKey=await crypto.subtle.importKey('raw',raw,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    const configuration=`${header}.${payload}.${toBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC',signingKey,utf8(`${header}.${payload}`))))}`;
+    return {masterkey,configuration,rootPath:await directoryPath('',material),backup:(await encryptHeader(material)).bytes};
+  } finally {raw.fill(0);passwordBytes.fill(0);kekBytes?.fill(0);if(material)destroyMaterial(material);}
+}
 export const headerSize = (combo: CipherCombo): number => combo === 'SIV_GCM' ? 68 : 88;
 export const chunkOverhead = (combo: CipherCombo): number => combo === 'SIV_GCM' ? 28 : 48;
 

@@ -6,8 +6,8 @@
   import {classify,formatSize,type VaultEntry} from '../lib/types';
   import {convertImage,convertMedia,defaultSettings,estimatedSize,inspectMedia,reduction,sourceStamp,type ConvertedMedia,type MediaDetails,type ConvertSettings} from '../lib/conversion';
   import {mediaURL,revokeMediaURL} from '../lib/media';
-  let {entry,client,root,streaming,onclose,onlock,oncommit}:{entry:VaultEntry;client:VaultClient;root:FileSystemDirectoryHandle;streaming:boolean;onclose:()=>void;onlock:()=>void;oncommit:(result:ConvertedMedia,remove:boolean,stamp:Awaited<ReturnType<typeof sourceStamp>>,signal:AbortSignal)=>Promise<void>}=$props();
-  let settings=$state<ConvertSettings>(untrack(()=>defaultSettings(entry))),details=$state<MediaDetails>(),estimate=$state<number>(),error=$state(''),working=$state(false),saving=$state(false),progress=$state(0),result=$state<ConvertedMedia>(),url=$state(''),loaded=$state(false),reviewed=$state(false),remove=$state(false),estimating=$state(true),phase=$state('Preparing');
+  let {entry,client,root,streaming,active,onstatus,onbackground,onclose,onlock,oncommit}:{entry:VaultEntry;client:VaultClient;root:FileSystemDirectoryHandle;streaming:boolean;active:boolean;onstatus:(status:string,progress:number)=>void;onbackground:()=>void;onclose:()=>void;onlock:()=>void;oncommit:(result:ConvertedMedia,remove:boolean,stamp:Awaited<ReturnType<typeof sourceStamp>>,signal:AbortSignal)=>Promise<void>}=$props();
+  let settings=$state<ConvertSettings>(untrack(()=>defaultSettings(entry))),details=$state<MediaDetails>(),estimate=$state<number>(),error=$state(''),working=$state(false),saving=$state(false),progress=$state(0),result=$state<ConvertedMedia>(),url=$state(''),loaded=$state(false),reviewed=$state(false),remove=$state(false),estimating=$state(true),phase=$state('Preparing'),started=$state(false);
   const controller=new AbortController();let estimateController:AbortController|undefined,preparedImage:Blob|undefined;let stamp=$state<Awaited<ReturnType<typeof sourceStamp>>>();
   const image=$derived(entry.kind==='image');
   onMount(async()=>{try{stamp=await sourceStamp(root,entry,controller.signal);if(!image)details=await inspectMedia(client,entry,controller.signal);}catch(e){if(!controller.signal.aborted)error=e instanceof Error?e.message:'Unable to inspect this file.';}finally{if(!controller.signal.aborted)estimating=false;}});
@@ -18,18 +18,29 @@
   const expected=$derived(image?estimate:details?estimatedSize(details,settings):undefined);
   function cleanupURL(){if(!url)return;if(image)URL.revokeObjectURL(url);else revokeMediaURL(url);url='';}
   onDestroy(()=>{controller.abort();estimateController?.abort();cleanupURL();preparedImage=undefined;void result?.spool.dispose();});
+  $effect(()=>{onstatus(error?'Failed':saving?'Saving encrypted copy':working?(started?'Converting':'Queued'):result?'Ready for review':estimating?'Preparing':'Awaiting settings',progress);});
+  $effect(()=>{
+    const converted=result,visible=active;if(!visible||!converted)return;
+    let alive=true;const task=new AbortController();
+    (async()=>{try{
+      if(image){const parts:Uint8Array<ArrayBuffer>[]=[];try{for(let offset=0;offset<converted.spool.size;offset+=4*1024*1024){task.signal.throwIfAborted();parts.push(await converted.spool.read(offset,Math.min(converted.spool.size,offset+4*1024*1024)));}if(alive)url=URL.createObjectURL(new Blob(parts,{type:converted.mime}));}finally{parts.forEach(part=>part.fill(0));}}
+      else{const preview:VaultEntry={...entry,id:converted.spool.id,name:converted.name,size:converted.spool.size,...classify(converted.name),mime:converted.mime};if(alive)url=mediaURL(preview,(start,end)=>converted.spool.read(start,end));}
+    }catch(e){if(alive)error=e instanceof Error?e.message:'Unable to preview conversion.';}})();
+    return()=>{alive=false;task.abort();cleanupURL();loaded=reviewed=remove=false;};
+  });
   async function convert(){
-    if(working||!stamp)return;working=true;phase='Converting';error='';
-    try{const converted=await convertMedia(client,entry,{...settings},controller.signal,p=>progress=p,preparedImage);controller.signal.throwIfAborted();result=converted;preparedImage=undefined;
-      if(image){const parts:Uint8Array<ArrayBuffer>[]=[];try{for(let offset=0;offset<converted.spool.size;offset+=4*1024*1024)parts.push(await converted.spool.read(offset,Math.min(converted.spool.size,offset+4*1024*1024)));url=URL.createObjectURL(new Blob(parts,{type:converted.mime}));}finally{parts.forEach(part=>part.fill(0));}}
-      else{const preview:VaultEntry={...entry,id:converted.spool.id,name:converted.name,size:converted.spool.size,...classify(converted.name),mime:converted.mime};url=mediaURL(preview,(start,end)=>converted.spool.read(start,end));}
+    if(working||!stamp)return;working=true;started=false;phase='Converting';error='';
+    try{const converted=await convertMedia(client,entry,{...settings},controller.signal,p=>{started=true;progress=p;},preparedImage);controller.signal.throwIfAborted();result=converted;preparedImage=undefined;
+
     }catch(e){if(!controller.signal.aborted)error=e instanceof Error?e.message:'Conversion failed.';}finally{if(!controller.signal.aborted)working=false;}
   }
   async function save(){if(!result||!stamp||!loaded||saving||remove&&!reviewed)return;saving=true;phase='Saving encrypted copy';error='';try{await oncommit(result,remove,stamp,controller.signal);controller.signal.throwIfAborted();onclose();}catch(e){if(!controller.signal.aborted)error=e instanceof Error?e.message:'Unable to save conversion.';}finally{if(!controller.signal.aborted)saving=false;}}
   async function reset(){cleanupURL();await result?.spool.dispose();result=undefined;loaded=reviewed=remove=false;progress=0;}
 </script>
+{#if active}
 <div class="modal-backdrop" role="presentation"><div class="settings-dialog conversion-dialog" role="dialog" aria-modal="true" aria-label="Convert media" tabindex="-1" use:focusDialog>
   <div class="dialog-heading"><div><span class="card-eyebrow">LOCAL CONVERSION</span><h2>{result?'Review conversion':'Convert media'}</h2></div><button class="icon-button" aria-label="Close conversion" onclick={onclose}><Icon name="close"/></button></div>
+  <button class="small-button" onclick={onbackground} disabled={saving}>Continue browsing</button>
   <button class="small-button" onclick={onlock}><Icon name="lock" size={14}/>Lock vault</button>
   <p class="conversion-filename">{entry.name} · {formatSize(entry.size)}</p>
   {#if error}<div class="error-banner" role="alert">{error}</div>{/if}
@@ -56,3 +67,5 @@
     <div class="dialog-actions"><button class="secondary-button" onclick={onclose}>{saving?'Cancel save':'Cancel'}</button><button class="secondary-button" disabled={saving} onclick={reset}>Adjust settings</button><button class="primary-button" disabled={saving||!loaded||remove&&!reviewed} onclick={save}>{saving?'Saving…':remove?'Save and remove original':'Save copy'}</button></div>
   {/if}
 </div></div>
+
+{/if}

@@ -329,7 +329,7 @@ test('media access stays in its unlocking tab and auto-lock revokes it',async({p
   expect(await other.evaluate(async url=>(await fetch(url!)).status,url)).toBe(403);await other.close();
   await page.getByRole('button',{name:'Preferences',exact:true}).click();
   await expect(page.getByRole('button',{name:'Close preferences'})).toBeFocused();
-  await page.getByLabel('Auto-lock timeout').selectOption('1');
+  await page.getByLabel('Auto-lock timeout').fill('1');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button',{name:'Preferences',exact:true})).toBeFocused();
   await page.clock.install();await page.getByRole('button',{name:'Close preview'}).click();await page.clock.fastForward(60001);
@@ -925,7 +925,13 @@ test('Mediabunny audio conversion retains sound and can remove the reviewed orig
 });
 
 test('Mediabunny MP4 conversion previews and saves with browser codecs',async({page})=>{
-  test.setTimeout(60000);await nativeSource(page);await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);await expect(page.getByText('Media streaming ready')).toBeVisible();await beginConversion(page,'A moment in bloom.mp4');await page.getByLabel('Conversion format').selectOption('mp4');await page.getByLabel('Video bitrate').selectOption('500000');await reviewConversion(page);
+  test.setTimeout(60000);await nativeSource(page);await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);await expect(page.getByText('Media streaming ready')).toBeVisible();await beginConversion(page,'A moment in bloom.mp4');await page.getByLabel('Conversion format').selectOption('mp4');await page.getByLabel('Video bitrate').selectOption('500000');
+  const supported=await page.evaluate(async()=>{
+    const api=window as any;
+    return !!api.VideoEncoder&&!!api.AudioEncoder&&(await api.VideoEncoder.isConfigSupported({codec:'avc1.42001f',width:640,height:420,bitrate:500000,framerate:30})).supported&&(await api.AudioEncoder.isConfigSupported({codec:'mp4a.40.2',sampleRate:48000,numberOfChannels:2,bitrate:128000})).supported;
+  });
+  if(!supported){const original=await nativeBytes(page,importPath('A moment in bloom.mp4').path);await page.getByRole('button',{name:'Convert and preview',exact:true}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('cannot convert every track');expect(await nativeBytes(page,importPath('A moment in bloom.mp4').path)).toEqual(original);await page.getByRole('button',{name:'Cancel',exact:true}).click();return;}
+  await reviewConversion(page);
   await page.locator('.converted-preview video').evaluate(async(video:HTMLVideoElement)=>{video.muted=true;await video.play();});await page.getByRole('button',{name:'Save copy',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);const clear=decryptReference(await nativeBytes(page,importPath('A moment in bloom (converted).mp4').path),fixtureRaw,'SIV_GCM');expect(clear.subarray(4,8).toString()).toBe('ftyp');
 });
 
@@ -934,4 +940,113 @@ test('video conversion reads inputs above the former in-memory limit without dec
   await page.evaluate(()=>{const post=Worker.prototype.postMessage;Object.assign(window,{__conversionReadBytes:0});Worker.prototype.postMessage=function(data:any,options:any){if(data?.action==='read')(window as any).__conversionReadBytes+=data.args[2]-data.args[1];return post.call(this,data,options);};});
   await beginConversion(page,'Long video.mp4');await page.getByLabel('Video bitrate').selectOption('500000');await reviewConversion(page);expect(await page.evaluate(()=>(window as any).__conversionReadBytes)).toBeLessThan(64*1024*1024);
   await page.getByRole('button',{name:'Save copy',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);expect(await nativeHas(page,importPath('Long video.mp4').path)).toBe(true);expect(await nativeHas(page,importPath('Long video (converted).webm').path)).toBe(true);
+});
+
+test('creates a real vault, remembers its handle and reopens imported files after reload',async()=>{
+  const profile=await mkdtemp(join(tmpdir(),'crypte-new-vault-'));
+  const context=await chromium.launchPersistentContext(profile,{baseURL:'http://localhost:4173',userAgent:'Mozilla/5.0 Chrome/152.0.0.0 Safari/537.36'});
+  try{
+    const page=context.pages()[0];const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+    await page.addInitScript(()=>Object.defineProperty(window,'showDirectoryPicker',{configurable:true,value:()=>navigator.storage.getDirectory()}));
+    await page.goto('/crypte/');await page.getByRole('button',{name:'Create new vault',exact:true}).click();
+    await page.getByLabel('Vault name',{exact:true}).fill('Personal vault');await page.getByRole('button',{name:'Choose vault location',exact:true}).click();
+    await page.getByLabel('New vault password',{exact:true}).fill('New café password');await page.getByLabel('Confirm vault password',{exact:true}).fill('New café password');
+    await page.getByRole('button',{name:'Create vault',exact:true}).click();await expect(page.getByRole('heading',{name:'All files',exact:true})).toBeVisible();
+    await expect(page.getByText('This folder is empty',{exact:true})).toBeVisible();
+    await page.getByLabel('Files to add',{exact:true}).setInputFiles({name:'Created here.txt',mimeType:'text/plain',buffer:Buffer.from('Persistent encrypted vault')});
+    await expect(page.getByRole('button',{name:'Open Created here.txt',exact:true})).toBeVisible();
+    const saved=await page.evaluate(async()=>new Promise<any[]>(resolve=>{const db=indexedDB.open('crypte',1);db.onsuccess=()=>{const req=db.result.transaction('recent').objectStore('recent').getAll();req.onsuccess=()=>resolve(req.result.map(({handle,...rest})=>({...rest,hasHandle:!!handle})));};}));
+    expect(saved).toHaveLength(1);expect(saved[0].name).toBe('Personal vault');expect(saved[0].hasHandle).toBe(true);expect(saved[0].password).toBeUndefined();
+    const metadata=await page.evaluate(async()=>{const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('Personal vault');return {master:await(await(await root.getFileHandle('masterkey.cryptomator')).getFile()).text(),config:await(await(await root.getFileHandle('vault.cryptomator')).getFile()).text()};});
+    expect(metadata.master).not.toContain('New café password');expect(metadata.config.split('.')).toHaveLength(3);
+    await page.reload();await expect(page.getByLabel('Vault password')).toBeVisible();await expect(page.locator('.app-shell')).toHaveCount(0);
+    await passwordUnlock(page,'wrong');await expect(page.getByRole('alert')).toContainText('Incorrect password');await passwordUnlock(page,'New café password');
+    await page.getByRole('button',{name:'Open Created here.txt',exact:true}).click();await expect(page.locator('.reader')).toContainText('Persistent encrypted vault');
+    expect(errors).toEqual([]);
+  }finally{await context.close();await rm(profile,{recursive:true,force:true});}
+});
+
+test('creation rejects mismatched passwords and existing names and cleans up failed writes',async({page})=>{
+  await page.addInitScript(()=>Object.defineProperty(window,'showDirectoryPicker',{configurable:true,value:()=>navigator.storage.getDirectory()}));
+  await page.goto('/crypte/');await page.evaluate(async()=>{const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('Existing',{create:true});const w=await(await root.getFileHandle('keep.txt',{create:true})).createWritable();await w.write('Keep me');await w.close();});
+  await page.getByRole('button',{name:'Create new vault',exact:true}).click();await page.getByLabel('Vault name',{exact:true}).fill('Existing');await page.getByRole('button',{name:'Choose vault location',exact:true}).click();
+  await page.getByLabel('New vault password',{exact:true}).fill('new password');await page.getByLabel('Confirm vault password',{exact:true}).fill('other password');await page.getByRole('button',{name:'Create vault',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Passwords must match');
+  await page.getByLabel('Confirm vault password',{exact:true}).fill('new password');await page.getByRole('button',{name:'Create vault',exact:true}).click();await expect(page.getByRole('alert')).toContainText('already exists');
+  expect(await page.evaluate(async()=>await(await(await(await navigator.storage.getDirectory()).getDirectoryHandle('Existing')).getFileHandle('keep.txt')).getFile().then(f=>f.text()))).toBe('Keep me');
+  await page.getByLabel('Vault name',{exact:true}).fill('Incomplete');await page.getByLabel('New vault password',{exact:true}).fill('new password');await page.getByLabel('Confirm vault password',{exact:true}).fill('new password');
+  await page.evaluate(()=>{const create=FileSystemFileHandle.prototype.createWritable;FileSystemFileHandle.prototype.createWritable=function(options){if(this.name==='masterkey.cryptomator')return Promise.reject(new Error('Injected disk failure'));return create.call(this,options);};});
+  await page.getByRole('button',{name:'Create vault',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Injected disk failure');
+  expect(await page.evaluate(async()=>{try{await(await navigator.storage.getDirectory()).getDirectoryHandle('Incomplete');return true;}catch{return false;}})).toBe(false);
+});
+
+test('image zoom, drag, wheel and reset work without overflowing mobile layout',async({page})=>{
+  await page.setViewportSize({width:390,height:844});await selectFixture(page,'gcm');await passwordUnlock(page);await page.getByRole('button',{name:'Open Northern light.png',exact:true}).click();await expect(page.locator('.image-view img')).toBeVisible();
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();await expect(page.locator('.image-controls')).toContainText('125%');
+  const stage=page.locator('.image-view');const rect=(await stage.boundingBox())!;await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2);await page.mouse.down();await page.mouse.move(rect.x+rect.width/2+20,rect.y+rect.height/2+10);await page.mouse.up();
+  expect(await stage.locator('img').getAttribute('style')).toContain('translate(20px, 10px)');
+  await page.mouse.wheel(0,-200);await expect.poll(()=>page.locator('.image-controls').textContent()).not.toContain('125%');
+  await page.getByRole('button',{name:'Fit image',exact:true}).click();await expect(page.locator('.image-controls')).toContainText('100%');expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('highlighted editor treats markup as text and preserves edited source when saved',async({page})=>{
+  await nativeSource(page);await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);
+  await expect(page.getByRole('heading',{name:'All files',exact:true})).toBeVisible();
+  const code='const message = "<img src=x onerror=alert(1)>";\n// comment\n';
+  await page.getByLabel('Files to add',{exact:true}).setInputFiles({name:'example.js',mimeType:'text/javascript',buffer:Buffer.from(code)});await page.getByRole('button',{name:'Open example.js',exact:true}).click();await page.getByRole('button',{name:'Edit text',exact:true}).click();
+  await expect(page.locator('.highlight-editor .hljs-keyword')).toHaveText('const');await expect(page.locator('.highlight-editor img, .highlight-editor script')).toHaveCount(0);await expect(page.getByLabel('Edit file contents')).toHaveValue(code);
+  await page.getByLabel('Edit file contents').fill(code+'let answer = 42;\n');await expect(page.locator('.highlight-editor .hljs-number')).toHaveText('42');await page.getByRole('button',{name:'Save changes',exact:true}).click();await expect(page.locator('.reader')).toContainText('let answer = 42');
+  expect(decryptReference(await nativeBytes(page,importPath('example.js').path),fixtureRaw,'SIV_GCM').toString()).toBe(code+'let answer = 42;\n');
+});
+
+test('video timeline decodes distinct timestamps, seeks and clears thumbnails on lock',async({page})=>{
+  await openVault(page);await page.getByRole('button',{name:'Open A moment in bloom.mp4',exact:true}).click();await expect(page.locator('.timeline-frames button')).toHaveCount(8,{timeout:20000});
+  const urls=await page.locator('.timeline-frames img').evaluateAll(images=>images.map(img=>(img as HTMLImageElement).src));expect(new Set(urls).size).toBe(8);
+  await page.locator('.timeline-frames button').nth(6).click();await expect.poll(()=>page.locator('video').evaluate(video=>(video as HTMLVideoElement).currentTime)).toBeGreaterThan(1);
+  const track=page.getByLabel('Scrub video');await track.focus();await page.keyboard.press('Home');await expect.poll(()=>page.locator('video').evaluate(video=>(video as HTMLVideoElement).currentTime)).toBeLessThan(.1);
+  await page.getByRole('button',{name:'Lock vault',exact:true}).click();await expect(page.locator('.video-timeline')).toHaveCount(0);expect(await page.evaluate(async url=>{try{await fetch(url);return true;}catch{return false;}},urls[0])).toBe(false);
+});
+
+test('pending conversions survive browsing and keep their original destination',async({page})=>{
+  await nativeSource(page);await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);
+  await page.getByRole('button',{name:'Open Small adventures',exact:true}).click();await beginConversion(page,'Morning walk.png');await reviewConversion(page);await page.getByRole('button',{name:'Continue browsing',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Conversions',exact:true})).toBeVisible();await expect(page.locator('.conversion-job')).toContainText('Ready for review');
+  await page.getByRole('button',{name:/All files/}).click();await expect(page.locator('.explorer-heading h1')).toHaveText('All files');await expect(page.locator('.sidebar')).not.toContainText('OPENED FOLDERS');await expect(page.locator('.sidebar .folder-name')).toHaveCount(0);
+  await beginConversion(page,'Northern light.png');await reviewConversion(page);await page.getByRole('button',{name:'Continue browsing',exact:true}).click();await expect(page.locator('.conversion-job')).toHaveCount(2);
+  const job=page.locator('.conversion-job').filter({hasText:'Morning walk.png'});await job.getByRole('button',{name:'Review',exact:true}).click();await expect(page.locator('.converted-preview img')).toBeVisible();await page.getByRole('button',{name:'Save copy',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await nativeHas(page,importPath('Morning walk (converted).webp','f62696f1-08d2-4f6a-ae51-559d038731a4').path)).toBe(true);expect(await nativeHas(page,importPath('Morning walk (converted).webp').path)).toBe(false);
+  await expect(page.locator('.conversion-job')).toHaveCount(1);await page.getByRole('button',{name:'Lock vault',exact:true}).click();await expect.poll(()=>page.evaluate(async()=>{let count=0;for await(const [name] of(await navigator.storage.getDirectory()).entries())if(name.startsWith('crypte-conversion-'))count++;return count;})).toBe(0);
+  await passwordUnlock(page);await page.getByRole('button',{name:'Conversions',exact:true}).click();await expect(page.getByText('No pending conversions',{exact:true})).toBeVisible();
+});
+
+test('custom inactivity and background locking preferences persist and manual settings disable timers',async({page})=>{
+  await openVault(page);await page.getByRole('button',{name:'Preferences',exact:true}).click();await page.getByLabel('Auto-lock timeout').fill('0');await page.getByLabel('Background lock timeout').fill('0');await page.getByLabel('Keep unlocked during conversions').check();await page.getByRole('button',{name:'Close preferences',exact:true}).click();
+  await page.clock.install();await page.clock.fastForward(16*60000);await expect(page.locator('.app-shell')).toBeVisible();
+  await page.reload();await page.getByLabel('Vault folder',{exact:true}).setInputFiles(resolve('tests/fixtures/gcm'));await passwordUnlock(page);await page.getByRole('button',{name:'Preferences',exact:true}).click();await expect(page.getByLabel('Auto-lock timeout')).toHaveValue('0');await expect(page.getByLabel('Background lock timeout')).toHaveValue('0');await expect(page.getByLabel('Keep unlocked during conversions')).toBeChecked();
+  await page.getByLabel('Auto-lock timeout').fill('0.5');await page.getByRole('button',{name:'Close preferences',exact:true}).click();await page.clock.fastForward(30001);await expect(page.getByLabel('Vault password')).toBeVisible();
+});
+
+test('conversions queue, cancel independently and postpone automatic locking only while processing',async({page})=>{
+  await nativeSource(page);await page.getByRole('button',{name:'Choose vault folder',exact:true}).click();await passwordUnlock(page);await page.getByRole('button',{name:'Preferences',exact:true}).click();
+  await page.getByLabel('Auto-lock timeout').fill('0.5');await page.getByLabel('Background lock timeout').fill('0');await page.getByLabel('Keep unlocked during conversions').check();await page.getByRole('button',{name:'Close preferences',exact:true}).click();
+  await page.evaluate(()=>{
+    const post=Worker.prototype.postMessage;
+    const gate=new Promise<void>(resolve=>(window as any).__releaseConversion=resolve);
+    (window as any).__holdConversion=true;
+    Worker.prototype.postMessage=function(data:any,options:any){
+      if(data?.action==='cache-crypt'&&String(data.args[1]).startsWith('conversion-v1:')&&!data.args[2]&&(window as any).__holdConversion){(window as any).__conversionHeld=true;void gate.then(()=>post.call(this,data,options));}
+      else post.call(this,data,options);
+    };
+  });
+  await beginConversion(page,'Northern light.png');await page.getByRole('button',{name:'Convert and preview',exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__conversionHeld)).toBe(true);await page.getByRole('button',{name:'Continue browsing',exact:true}).click();
+  await page.getByRole('button',{name:/All files/}).click();await beginConversion(page,'Still waters.png');await page.getByRole('button',{name:'Convert and preview',exact:true}).click();await page.getByRole('button',{name:'Continue browsing',exact:true}).click();
+  await expect(page.locator('.conversion-job').filter({hasText:'Still waters.png'})).toContainText('Queued');await page.clock.install();await page.clock.fastForward(60001);await expect(page.locator('.app-shell')).toBeVisible();
+  await page.locator('.conversion-job').filter({hasText:'Still waters.png'}).getByRole('button',{name:'Cancel',exact:true}).click();await expect(page.locator('.conversion-job')).toHaveCount(1);
+  await page.evaluate(()=>{(window as any).__holdConversion=false;(window as any).__releaseConversion();});await expect(page.locator('.conversion-job')).toContainText('Ready for review');
+  await page.clock.fastForward(30001);await expect(page.getByLabel('Vault password')).toBeVisible();await expect.poll(()=>page.evaluate(async()=>{let count=0;for await(const [name] of(await navigator.storage.getDirectory()).entries())if(name.startsWith('crypte-conversion-'))count++;return count;})).toBe(0);
+});
+
+test('background timeout locks independently from inactivity and can be disabled',async({page})=>{
+  await openVault(page);await page.getByRole('button',{name:'Preferences',exact:true}).click();await page.getByLabel('Auto-lock timeout').fill('0');await page.getByLabel('Background lock timeout').fill('0');await page.getByRole('button',{name:'Close preferences',exact:true}).click();
+  await page.clock.install();await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});await page.clock.fastForward(120001);await expect(page.locator('.app-shell')).toBeVisible();
+  await page.getByRole('button',{name:'Preferences',exact:true}).click();await page.getByLabel('Background lock timeout').fill('0.5');await page.getByRole('button',{name:'Close preferences',exact:true}).click();await page.clock.fastForward(30001);await expect(page.getByLabel('Vault password')).toBeVisible();
 });
