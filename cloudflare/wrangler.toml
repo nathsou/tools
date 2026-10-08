@@ -17,3 +17,7 @@ new_sqlite_classes = ["DropRoom"]
 
 [observability]
 enabled = false
+
+[[previews.durable_objects.bindings]]
+name = "DROP_ROOMS"
+class_name = "DropRoom"
