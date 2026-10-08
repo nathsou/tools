@@ -113,7 +113,11 @@ test('tampered manual response is rejected without replacing the connection', as
     await sender.getByLabel('Response from the other device').fill(await receiver.getByLabel('Your connection response').inputValue());
     await sender.getByRole('button', { name: 'Complete connection' }).click();
     await expect(sender.getByRole('heading', { name: 'You’re connected.' })).toBeVisible();
+    await expect(receiver.getByRole('heading', { name: 'You’re connected.' })).toBeVisible();
     await sender.getByRole('button', { name: 'Disconnect', exact: true }).click();
-    await expect(receiver.getByRole('alert')).toContainText('closed');
+    // Native SCTP teardown can report either error or close first.
+    await expect(receiver.getByRole('alert')).toBeVisible();
+    await expect(receiver.locator('#badge-label')).toHaveText('Disconnected');
+    await expect(receiver.getByRole('button', { name: 'Start again', exact: true })).toBeVisible();
   } finally { await context.close(); }
 });
