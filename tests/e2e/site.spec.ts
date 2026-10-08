@@ -33,3 +33,14 @@ test('Crypte works under a project subdirectory, including authenticated video s
   const range=await page.evaluate(async url=>{const response=await fetch(url!,{headers:{Range:'bytes=0-15'}});return {status:response.status,bytes:(await response.arrayBuffer()).byteLength};},url);expect(range).toEqual({status:206,bytes:16});
   await context.setOffline(true);await page.reload();await expect(page.getByRole('heading',{name:'Open a vault',exact:true})).toBeVisible();await page.getByLabel('Vault folder',{exact:true}).setInputFiles(resolve('tests/fixtures/gcm'));await page.getByLabel('Vault password').fill('crypte-demo');await page.getByRole('button',{name:'Unlock vault',exact:true}).click();await expect(page.getByRole('heading',{name:'All files',exact:true})).toBeVisible();await expect(page.getByText('Media streaming ready',{exact:true})).toBeVisible();
 });
+
+test('Drop opens under a project subdirectory without inheriting a service worker', async ({ page }) => {
+  await page.goto(subpathURL);
+  await page.getByRole('link', { name: 'Open Drop', exact: true }).click();
+  await expect(page).toHaveURL(subpathURL + 'drop/');
+  await expect(page.getByRole('heading', { name: 'Make a connection.' })).toBeVisible();
+  await expect(page.locator('#connection-status')).toContainText('Manual pairing');
+  expect(await page.evaluate(() => navigator.serviceWorker.controller)).toBeNull();
+  await page.setViewportSize({ width: 360, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+});

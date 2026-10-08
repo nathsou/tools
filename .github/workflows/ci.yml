@@ -28,9 +28,20 @@ jobs:
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: dist
+  drop-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - name: Install dependencies
+        run: mise exec -- bun install --frozen-lockfile
+      - name: Install browser
+        run: mise exec -- bunx playwright install --with-deps chromium
+      - name: Verify direct browser transfers
+        run: mise exec -- bun run test:e2e tests/e2e/drop.spec.ts
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: check
+    needs: [check, drop-browser]
     runs-on: ubuntu-latest
     permissions:
       pages: write
