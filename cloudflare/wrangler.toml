@@ -1,4 +1,4 @@
-name = "tools-drop"
+name = "tools"
 main = "drop-worker.js"
 compatibility_date = "2026-10-01"
 
