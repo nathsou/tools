@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Send a file directly to another browser. Private, encrypted transfers with no uploads and no accounts." />
+  <meta name="theme-color" content="#f8f9f4" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none';" />
+  <link rel="icon" href="../tools.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="../src/drop/style.css" />
+  <title>Drop — private file sharing</title>
+</head>
+<body>
+  <div class="shell">
+    <header class="header"><a class="brand" href="../" aria-label="Tools home"><img src="../tools.svg" alt="" width="28" height="28"/>Tools<span>.</span><span class="divider">/</span><span class="current">Drop</span></a><a class="quiet-link" href="https://github.com/nathsou/tools/tree/main/drop">Source &amp; guide <span aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12"/></svg></span></a></header>
+    <main>
+      <section class="intro"><p class="eyebrow">JUST BETWEEN TWO DEVICES</p><h1>A little closer.<br/>A lot more private.</h1><p>Send a file straight to another browser.<br class="desktop-break"/> No account. No upload. Just a direct connection.</p></section>
+      <div class="workspace">
+        <section class="transfer-card" aria-labelledby="card-title">
+          <div class="card-heading"><div><p class="eyebrow">BROWSER TO BROWSER</p><h2 id="card-title">Make a connection.</h2></div><span id="status-badge" class="badge"><span class="status-dot"></span><span id="badge-label">Not connected</span></span></div>
+          <div id="notice" class="notice" role="alert" hidden></div>
+          <noscript><p class="notice">Drop needs JavaScript to connect browsers and transfer files.</p></noscript>
+          <div id="setup">
+            <div class="mode-switch" role="group" aria-label="Transfer direction"><button id="send-mode" aria-pressed="true">Send a file <span aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12"/></svg></span></button><button id="receive-mode" aria-pressed="false">Receive a file <span aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 6 6 18M6 6v12h12"/></svg></span></button></div>
+            <div id="send-setup">
+              <input id="file-input" class="visually-hidden" type="file" aria-label="Choose a file" />
+              <button id="drop-zone" class="drop-zone" type="button"><span class="upload-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 30H9a6 6 0 0 1-1-12 11 11 0 0 1 21-5 9 9 0 0 1 6 17h-2"/><path d="M24 38V20m-6 6 6-6 6 6"/></svg></span><strong id="selection-name">Drop a file here</strong><span id="selection-detail">or click to choose from your computer</span><span class="small-tag">Any file type · One file at a time</span></button>
+              <button id="create" class="primary full" disabled>Create invitation <span aria-hidden="true">→</span></button>
+              <p class="field-help centered">Choose a file, then invite your other device.</p>
+            </div>
+            <form id="join-form" hidden><label for="join-link">Invitation link</label><textarea id="join-link" rows="3" placeholder="Paste the invitation from the sending device" spellcheck="false" autocapitalize="off"></textarea><button class="primary full" type="submit">Join connection <span aria-hidden="true">→</span></button><p class="field-help">On the other device, choose Send a file and create an invitation first.</p></form>
+            <details class="options"><summary>Connection options</summary><div class="options-inner"><label class="checkbox"><input id="manual" type="checkbox" /> Pair manually, without a signaling service</label><label for="stun">Your STUN server <span class="optional">optional</span></label><input id="stun" type="text" placeholder="stun:your-server.example:3478" spellcheck="false" autocapitalize="off" /><p class="field-help">Blank by default: no outside services. STUN can help across networks and sees your IP address, but never carries your files. TURN relays are never used. Both devices can set their own STUN server before connecting.</p></div></details>
+          </div>
+          <div id="invited" hidden>
+            <div class="connection-visual" aria-hidden="true"><span class="device"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="9" width="32" height="24" rx="3"/><path d="M18 40h12m-6-7v7"/></svg></span><span class="connection-line">··········</span><span class="device"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="9" width="32" height="24" rx="3"/><path d="M18 40h12m-6-7v7"/></svg></span></div>
+            <h3 id="invite-title">Invite your other device.</h3><p id="invite-help" class="description">Open this private link in the other browser. Keep this tab open.</p>
+            <label for="invitation">Private invitation link</label><div class="copy-row"><input id="invitation" readonly /><button id="copy-invite" class="secondary">Copy link</button></div><p class="field-help">Treat this link like a password. It pairs only two devices and expires in 10 minutes.</p>
+            <div id="answer-entry" hidden><label for="answer-input">Response from the other device</label><textarea id="answer-input" rows="3" placeholder="Paste the connection response here" spellcheck="false"></textarea><button id="connect-answer" class="primary full">Complete connection <span aria-hidden="true">→</span></button></div>
+          </div>
+          <div id="joining" hidden><div class="connection-visual" aria-hidden="true"><span class="device"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="9" width="32" height="24" rx="3"/><path d="M18 40h12m-6-7v7"/></svg></span><span class="connection-line">··········</span><span class="device"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="9" width="32" height="24" rx="3"/><path d="M18 40h12m-6-7v7"/></svg></span></div><h3>Ready to receive?</h3><p class="description">Connect to the device that shared this invitation. You’ll approve each file before it’s sent.</p><button id="join-invitation" class="primary full">Connect to sender <span aria-hidden="true">→</span></button><div id="manual-response" hidden><label for="response">Your connection response</label><textarea id="response" rows="3" readonly spellcheck="false"></textarea><button id="copy-response" class="secondary full">Copy response</button><p class="field-help">Send this response back to the sender. They’ll paste it into their tab to finish connecting.</p></div></div>
+          <div id="connected" hidden>
+            <div class="connected-heading"><span class="connected-icon" aria-hidden="true">✓</span><div><h3>You’re connected.</h3><p class="description">Encrypted. Direct. Just the two of you.</p></div></div>
+            <div id="sender-controls"><div class="file-summary"><span class="file-icon" aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12"/></svg></span><div><strong id="send-name"></strong><span id="send-size"></span></div><button id="change-file" class="text-button">Change</button></div><button id="send-file" class="primary full">Send file <span aria-hidden="true">→</span></button></div>
+            <p id="receiver-wait" class="waiting" hidden>Waiting for the sender to choose a file…</p>
+            <div id="incoming" hidden><p class="eyebrow">INCOMING FILE</p><div class="file-summary"><span class="file-icon" aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 6 6 18M6 6v12h12"/></svg></span><div><strong id="incoming-name"></strong><span id="incoming-size"></span></div></div><p id="save-help" class="field-help"></p><div class="button-row"><button id="accept-file" class="primary">Accept file</button><button id="decline-file" class="secondary">Decline</button></div></div>
+            <div id="transfer-progress" hidden><div class="progress-heading"><strong id="progress-title">Waiting for acceptance…</strong><span id="progress-percent">0%</span></div><progress id="progress" max="100" value="0" aria-label="File transfer progress"></progress><div class="progress-footer"><span id="progress-detail">The other device must approve this file.</span><button id="cancel-transfer" class="text-button">Cancel transfer</button></div></div>
+            <div id="result" class="result" role="status" hidden><strong id="result-title"></strong><p id="result-detail"></p><a id="download" class="primary" hidden>Save file</a></div>
+          </div>
+          <p id="connection-status" class="connection-status" role="status" aria-live="polite">Checking browser support…</p>
+          <button id="reset" class="text-button reset" hidden>Cancel invitation</button>
+        </section>
+        <aside class="explanation"><span class="aside-mark" aria-hidden="true"><svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 18 18 6M6 6h12v12"/></svg></span><h2>A short path<br/> for your files.</h2><ol class="steps"><li><span>01</span><div><h3>Choose your file</h3><p>A photo, a document, that thing you need on your other computer.</p></div></li><li><span>02</span><div><h3>Connect the two browsers</h3><p>Share a private invitation. Keep both tabs open while they connect.</p></div></li><li><span>03</span><div><h3>Accept. Send. Done.</h3><p>Your file moves directly between devices over an encrypted connection.</p></div></li></ol><div class="privacy-note"><span aria-hidden="true">◇</span><p><strong>Your files don’t stop here.</strong>No file storage, analytics, or relay servers. The hosting service only helps browsers meet when automatic pairing is available.</p></div></aside>
+      </div>
+      <section class="faq" aria-label="Good to know"><details><summary>Do the devices need to be on the same Wi-Fi?</summary><p>The same Wi-Fi is the easiest place to start. Drop uses no STUN service by default, so connections between different networks can fail. You can add your own STUN server in Connection options. Some restrictive networks still require a relay; Drop will report a connection failure instead of relaying your file.</p></details><details><summary>How private is the connection?</summary><p>WebRTC encrypts every file in transit. Your invitation authenticates the connection, and the pairing secret stays in the link’s fragment, outside server requests. Anyone with the full invitation can join, so share it privately. The other device learns your network address. As with any web app, you must trust the site hosting the JavaScript.</p></details><details><summary>Can I send large files?</summary><p>Browsers with a file save picker, such as desktop Chrome and Edge, can write directly to disk. Other browsers keep the received file in memory, with a 128 MB limit per file. Keep both tabs active and your devices awake. Interrupted transfers need to restart.</p></details></section>
+    </main>
+    <footer><span>A tool by <a href="https://github.com/nathsou">nathsou</a></span><span>Less in the cloud. More in your hands.</span></footer>
+  </div>
+  <script type="module" src="../src/drop/main.ts"></script>
+</body>
+</html>

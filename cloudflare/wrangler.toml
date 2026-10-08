@@ -1,0 +1,19 @@
+name = "tools-drop"
+main = "drop-worker.js"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+run_worker_first = ["/drop/*"]
+
+[[durable_objects.bindings]]
+name = "DROP_ROOMS"
+class_name = "DropRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DropRoom"]
+
+[observability]
+enabled = false
