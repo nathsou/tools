@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
+async function disableDiscovery(page: Page) {
+  await page.getByText('Connection options', { exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Find a direct route with STUN' }).uncheck();
+}
+
 async function requireDirectNetworking(page: Page) {
   await page.goto('/drop/');
   const available = await page.evaluate(async () => {
@@ -22,6 +27,8 @@ async function requireDirectNetworking(page: Page) {
 
 async function pair(sender: Page, receiver: Page, file = { name: 'hello.txt', mimeType: 'text/plain', buffer: Buffer.from('A private file, straight between two browsers.\n') }) {
   await sender.goto('/drop/');
+  // Keep ordinary transfer tests local and independent of a public STUN service.
+  await disableDiscovery(sender);
   await sender.getByLabel('Choose a file', { exact: true }).setInputFiles(file);
   await sender.getByRole('button', { name: 'Create invitation' }).click();
   const link = sender.getByLabel('Private invitation link');
@@ -29,6 +36,7 @@ async function pair(sender: Page, receiver: Page, file = { name: 'hello.txt', mi
   const invitation = await link.inputValue();
   expect(invitation).toContain('#v=1&key=');
   await receiver.goto(invitation);
+  await disableDiscovery(receiver);
   await receiver.getByRole('button', { name: 'Connect to sender' }).click();
   const response = receiver.getByLabel('Your connection response');
   await expect(response).not.toHaveValue('');
@@ -95,16 +103,75 @@ test('mobile and dark layouts, keyboard flow, and invalid invitations', async ({
   await expect.poll(() => new URL(page.url()).hash).toBe('');
 });
 
+test('discovery defaults work for either role, allow overrides, and stay off when disabled', async ({ browser }) => {
+  const context = await browser.newContext();
+  // Observe the actual Peer configuration without relying on public UDP services in CI.
+  await context.addInitScript(() => {
+    const NativePC = window.RTCPeerConnection;
+    const configurations: RTCConfiguration[] = [];
+    (window as any).dropConfigurations = configurations;
+    window.RTCPeerConnection = class extends NativePC {
+      constructor(configuration: RTCConfiguration = {}) {
+        configurations.push(configuration);
+        super({ ...configuration, iceServers: [] });
+      }
+    };
+  });
+  const sender = await context.newPage(), receiver = await context.newPage();
+  const configuredServers = (page: Page) => page.evaluate(() => (window as any).dropConfigurations.at(-1).iceServers);
+  try {
+    await requireDirectNetworking(sender);
+    await sender.getByLabel('Choose a file', { exact: true }).setInputFiles({ name: 'routes.txt', mimeType: 'text/plain', buffer: Buffer.from('Discovery regression') });
+    await expect(sender.getByText('Network discovery uses Google STUN. Files travel directly between devices.')).toBeVisible();
+    await sender.getByRole('button', { name: 'Create invitation' }).click();
+    await expect(sender.getByLabel('Private invitation link')).not.toHaveValue('');
+    const invitation = await sender.getByLabel('Private invitation link').inputValue();
+    expect(await configuredServers(sender)).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+    await receiver.goto(invitation);
+    await receiver.getByRole('button', { name: 'Connect to sender' }).click();
+    await expect(receiver.getByLabel('Your connection response')).not.toHaveValue('');
+    expect(await configuredServers(receiver)).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+
+    await sender.getByRole('button', { name: 'Cancel invitation', exact: true }).click();
+    await sender.getByText('Connection options', { exact: true }).click();
+    const discovery = sender.getByRole('checkbox', { name: 'Find a direct route with STUN' });
+    const custom = sender.getByLabel('Custom STUN server', { exact: false });
+    await custom.fill('stun:my-server.example:3478');
+    await sender.getByRole('button', { name: 'Create invitation' }).click();
+    await expect(sender.getByLabel('Private invitation link')).not.toHaveValue('');
+    expect(await configuredServers(sender)).toEqual([{ urls: 'stun:my-server.example:3478' }]);
+    await sender.getByText('Connection options', { exact: true }).click();
+    await expect(discovery).toBeDisabled();
+    await expect(custom).toBeDisabled();
+    await sender.getByRole('button', { name: 'Cancel invitation', exact: true }).click();
+    await expect(discovery).toBeEnabled();
+    await custom.fill('turn:relay.example');
+    await sender.getByRole('button', { name: 'Create invitation' }).click();
+    await expect(sender.getByRole('alert')).toContainText('TURN relays are not supported');
+    await discovery.uncheck();
+    await expect(custom).toBeDisabled();
+    await sender.getByRole('button', { name: 'Create invitation' }).click();
+    await expect(sender.getByLabel('Private invitation link')).not.toHaveValue('');
+    expect(await configuredServers(sender)).toEqual([]);
+    await sender.getByRole('button', { name: 'Cancel invitation', exact: true }).click();
+    await sender.getByText('Connection options', { exact: true }).click();
+    await expect(discovery).not.toBeChecked();
+    await expect(custom).toBeDisabled();
+  } finally { await context.close(); }
+});
+
 test('tampered manual response is rejected without replacing the connection', async ({ browser }) => {
   const context = await browser.newContext();
   const sender = await context.newPage(), receiver = await context.newPage();
   try {
     await requireDirectNetworking(sender);
     await sender.goto('/drop/');
+    await disableDiscovery(sender);
     await sender.getByLabel('Choose a file', { exact: true }).setInputFiles({ name: 'empty.txt', mimeType: 'text/plain', buffer: Buffer.alloc(0) });
     await sender.getByRole('button', { name: 'Create invitation' }).click();
     await expect(sender.getByLabel('Private invitation link')).not.toHaveValue('');
     await receiver.goto(await sender.getByLabel('Private invitation link').inputValue());
+    await disableDiscovery(receiver);
     await receiver.getByRole('button', { name: 'Connect to sender' }).click();
     await expect(receiver.getByLabel('Your connection response')).not.toHaveValue('');
     await sender.getByLabel('Response from the other device').fill('not-the-response');

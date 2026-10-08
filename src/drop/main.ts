@@ -1,6 +1,6 @@
 import { Peer } from './peer';
 import { Transfer, type Sink } from './transfer';
-import { credentials, formatBytes, MEMORY_LIMIT, newSecret, stunServers, type FileOffer } from './protocol';
+import { credentials, DEFAULT_STUN, formatBytes, MEMORY_LIMIT, newSecret, stunServers, type FileOffer } from './protocol';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const show = (id: string, visible = true) => { $(id).hidden = !visible; };
@@ -63,7 +63,8 @@ function reset() {
   input('invitation').value = '';
   $<HTMLTextAreaElement>('response').value = '';
   $<HTMLTextAreaElement>('answer-input').value = '';
-  for (const id of ['stun', 'manual']) input(id).disabled = false;
+  for (const id of ['stun', 'manual', 'discovery']) input(id).disabled = false;
+  discoverySettings();
   busyControls(false);
   button('connect-answer').disabled = false;
   panel('setup');
@@ -77,6 +78,15 @@ function mode(next: 'host' | 'guest') {
   button('receive-mode').setAttribute('aria-pressed', String(role === 'guest'));
   show('send-setup', role === 'host'); show('join-form', role === 'guest');
 }
+function discoverySettings() {
+  const enabled = input('discovery').checked;
+  input('stun').disabled = !enabled || !!peer;
+  text('discovery-status', enabled
+    ? input('stun').value.trim()
+      ? 'Network discovery uses your STUN server. Files travel directly between devices.'
+      : 'Network discovery uses Google STUN. Files travel directly between devices.'
+    : 'Network discovery is off. Local connections may fail even on the same Wi-Fi.');
+}
 function selectFile(selected?: File) {
   if (!selected || transfer?.busy) return;
   file = selected;
@@ -89,7 +99,7 @@ function selectFile(selected?: File) {
 }
 function makePeer(secret: string) {
   const current = generation;
-  const iceServers = stunServers(input('stun').value);
+  const iceServers = stunServers(input('stun').value, input('discovery').checked);
   const created = new Peer({
     secret, role, iceServers,
     onStatus: message => { if (current === generation) status(message, 'Connecting'); },
@@ -158,7 +168,7 @@ function makePeer(secret: string) {
     }
   });
   peer = created;
-  for (const id of ['stun', 'manual']) input(id).disabled = true;
+  for (const id of ['stun', 'manual', 'discovery']) input(id).disabled = true;
   return created;
 }
 
@@ -239,6 +249,10 @@ function action(id: string, callback: () => void | Promise<void>) {
 }
 action('send-mode', () => mode('host'));
 action('receive-mode', () => mode('guest'));
+input('discovery').addEventListener('change', discoverySettings);
+input('stun').addEventListener('input', discoverySettings);
+input('stun').placeholder = DEFAULT_STUN;
+discoverySettings();
 action('drop-zone', () => input('file-input').click());
 action('change-file', () => input('file-input').click());
 input('file-input').addEventListener('change', () => selectFile(input('file-input').files?.[0]));
@@ -310,6 +324,7 @@ async function boot() {
   // Shared options stay reachable for an invitation opened on a different network.
   const options = document.querySelector('.options')!;
   $('connection-status').before(options);
+  $('connection-status').before($('discovery-status'));
   if (!supported) {
     error('Drop needs HTTPS (or localhost) and a browser with WebRTC and Web Crypto. Try a current version of Chrome, Edge, Firefox, or Safari.');
     for (const id of ['create', 'join-invitation', 'receive-mode']) button(id).disabled = true;

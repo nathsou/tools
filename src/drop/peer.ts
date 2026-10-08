@@ -35,7 +35,7 @@ export class Peer {
         clearTimeout(this.disconnectTimer);
         this.socket?.close(1000, 'Connected');
       } else if (this.pc.connectionState === 'failed') {
-        this.fail(new Error('A direct connection could not be established. Try the same Wi-Fi, turn off a VPN, or configure your own STUN server in Connection options. Some networks require a relay, which Drop does not use.'));
+        this.fail(new Error(this.routeFailure('A direct connection could not be established.')));
       } else if (this.pc.connectionState === 'disconnected') {
         options.onStatus('Connection interrupted. Trying to reconnect…');
         this.disconnectTimer = setTimeout(() => this.fail(new Error('The other device disconnected. Create a new invitation to reconnect.')), 10_000);
@@ -62,7 +62,13 @@ export class Peer {
 
   private deadline(ms = 60_000) {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.fail(new Error('Connection timed out. Keep both tabs open and try the same Wi-Fi. With no STUN server, connections across the internet may not work.')), ms);
+    this.timer = setTimeout(() => this.fail(new Error(this.routeFailure('Connection timed out.'))), ms);
+  }
+
+  private routeFailure(message: string) {
+    return `${message} Keep both tabs open and try the same Wi-Fi. ${this.options.iceServers.length
+      ? 'Check your VPN, firewall, or STUN server in Connection options.'
+      : 'Enable STUN discovery in Connection options on both devices; local routes can fail even on the same Wi-Fi.'} Some networks require a relay, which Drop does not use.`;
   }
 
   private async local(type: 'offer' | 'answer') {

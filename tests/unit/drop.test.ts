@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { credentials, decode, description, encode, fileOffer, MEMORY_LIMIT, newSecret, safeName, seal, stunServers, unseal, WINDOW_SIZE } from '../../src/drop/protocol';
+import { credentials, decode, DEFAULT_STUN, description, encode, fileOffer, MEMORY_LIMIT, newSecret, safeName, seal, stunServers, unseal, WINDOW_SIZE } from '../../src/drop/protocol';
 import { Transfer, type Sink } from '../../src/drop/transfer';
 import worker, { DropRoom } from '../../cloudflare/drop-worker.js';
 
@@ -43,7 +43,10 @@ describe('Drop authenticated pairing', () => {
     for (const size of [-1, Infinity, 1.5, Number.MAX_SAFE_INTEGER]) expect(() => fileOffer({ ...offer, size })).toThrow();
     expect(() => fileOffer({ ...offer, id: '../room' })).toThrow();
     expect(safeName('../a\\b\u202etxt.exe')).toBe('_a_b_txt.exe');
-    expect(stunServers('')).toEqual([]);
+    expect(stunServers('')).toEqual([{ urls: DEFAULT_STUN }]);
+    expect(stunServers('   ')).toEqual([{ urls: DEFAULT_STUN }]);
+    expect(stunServers('', false)).toEqual([]);
+    expect(stunServers('stun:example.com:3478', false)).toEqual([]);
     expect(stunServers('stun:example.com:3478')).toEqual([{ urls: 'stun:example.com:3478' }]);
     expect(() => stunServers('turn:example.com')).toThrow();
     expect(() => stunServers('https://example.com')).toThrow();

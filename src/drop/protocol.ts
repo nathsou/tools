@@ -4,6 +4,7 @@ export const CHUNK_SIZE = 16 * 1024;
 export const WINDOW_SIZE = 256 * 1024;
 export const MEMORY_LIMIT = 128 * 1024 * 1024;
 export const MAX_SIGNAL_SIZE = 64 * 1024;
+export const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 const encoder = new TextEncoder();
 
 export function encode(bytes: Uint8Array): string {
@@ -72,9 +73,9 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** power).toFixed(power === 1 ? 0 : 1)} ${['B', 'KB', 'MB', 'GB', 'TB'][power]}`;
 }
 
-export function stunServers(value: string): RTCIceServer[] {
-  const url = value.trim();
-  if (!url) return [];
+export function stunServers(value: string, enabled = true): RTCIceServer[] {
+  if (!enabled) return [];
+  const url = value.trim() || DEFAULT_STUN;
   if (!/^stuns?:[a-zA-Z0-9.-]+(?::\d{1,5})?$/.test(url)) throw new Error('Enter a STUN URL such as stun:your-server.example:3478. TURN relays are not supported.');
   return [{ urls: url }];
 }

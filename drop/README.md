@@ -1,6 +1,6 @@
 # Drop
 
-Private, direct file sharing between two browsers at `/drop/`. Built with native WebRTC, Web Crypto, DOM and file APIs. Drop imports **no third-party runtime libraries**, adds no package dependencies, and contacts no third-party services by default. The repository's existing Vite/TypeScript tools build its frontend; Cloudflare's optional Worker provides signaling only.
+Private, direct file sharing between two browsers at `/drop/`. Built with native WebRTC, Web Crypto, DOM and file APIs. Drop imports **no third-party runtime libraries**, adds no package dependencies, and uses Google STUN for network discovery by default. Discovery can be disabled or pointed at your own STUN server; file data always travels directly between browsers. The repository's existing Vite/TypeScript tools build its frontend; Cloudflare's optional Worker provides signaling only.
 
 ## Use it
 
@@ -15,8 +15,8 @@ Invitations are valid while the sending tab waits, for up to ten minutes. Share 
 ## Networking and browser support
 
 - HTTPS or localhost is required. Use current Chrome, Edge, Firefox or Safari with WebRTC enabled.
-- `iceServers` is empty by default. Start with two computers on the same Wi-Fi. Local network isolation, browser IP restrictions, VPNs and firewalls can prevent a direct connection even there.
-- An optional **STUN URL** in Connection options can help across networks. Enter a server you operate or trust, on each device before connecting. There is no built-in public STUN provider. Its operator sees network metadata, not file contents. A normal Cloudflare Worker cannot host a UDP STUN server.
+- **STUN discovery is enabled by default**, using `stun:stun.l.google.com:19302` on both browsers. This supplies additional direct routes when local `.local` (mDNS) candidates cannot be resolved, including on the same machine or Wi-Fi. The Google server sees network metadata such as your IP address, not file contents.
+- In **Connection options**, turn off **Find a direct route with STUN** to use only local candidates and avoid outside discovery services, or enter a **Custom STUN server** you operate or trust. An empty custom field uses Google while discovery is on; with discovery off, `iceServers` is empty even if a custom address remains in the field. Each device chooses independently before creating or joining an invitation. Local network isolation, browser IP restrictions, VPNs and firewalls can still prevent a direct connection. A normal Cloudflare Worker cannot host a UDP STUN server.
 - **TURN is never configured**. If ICE cannot find a direct path, Drop reports the failure; there is no server file upload or relay fallback. Universal connectivity is incompatible with this constraint.
 - Desktop Chromium's save picker supports files larger than memory. Other browsers receive at most **128 MiB per file** into memory and require a download click. The UI uses the familiar “128 MB” label for this binary limit.
 - One sender and one receiver, one file at a time. No folders, resumable transfers, background transfers, nearby-device discovery, or automatic retry. A failed transfer must restart. Browser file pickers may enforce additional filename restrictions.
@@ -37,7 +37,7 @@ mise run build
 
 Deploy `dist/` to any HTTPS static host, including Cloudflare Pages and GitHub Pages. Preserve the `/drop/` directory. Relative assets and invitation URLs support project subdirectories such as `/tools/drop/`.
 
-The app probes its own `api/config` endpoint once. Without the optional backend, it uses manual pairing automatically. There is no external signaling service to configure, no CDN imports, no analytics and no Drop service worker. Crypte's offline worker excludes Drop's assets.
+The app probes its own `api/config` endpoint once. Without the optional backend, it uses manual pairing automatically. There is no external signaling service to configure, no CDN imports, no analytics and no Drop service worker. STUN discovery remains enabled by default in manual mode; manual pairing only avoids the signaling backend. Disable discovery on both devices if you want pairing without outside services. Crypte's offline worker excludes Drop's assets.
 
 ## Cloudflare automatic pairing
 
@@ -78,7 +78,7 @@ mise exec -- bunx playwright install chromium
 mise exec -- bun run test:e2e tests/e2e/drop.spec.ts
 ```
 
-The browser suite covers responsive light/dark layouts, invalid invitations, real manual WebRTC pairing, receiver consent, download bytes, repeated transfers, and tampered answers. Actual transfer tests explicitly skip when the browser exposes no direct ICE candidates (for example, a managed policy disabling non-proxied WebRTC). Unit tests still exercise chunking, exact bytes, zero-byte files, backpressure, cancellation, disk errors, limits and authenticated encryption.
+The browser suite covers responsive light/dark layouts, invalid invitations, real manual WebRTC pairing, receiver consent, download bytes, repeated transfers, tampered answers, and default/custom/disabled discovery for both roles. Ordinary transfer tests explicitly disable discovery so CI does not depend on public UDP services; the discovery configuration test intercepts the native peer constructor to verify the chosen servers without contacting them. Actual transfer tests explicitly skip when the browser exposes no direct ICE candidates (for example, a managed policy disabling non-proxied WebRTC). Unit tests still exercise chunking, exact bytes, zero-byte files, backpressure, cancellation, disk errors, limits and authenticated encryption.
 
 To test the actual Cloudflare runtime, leave `wrangler dev --config cloudflare/wrangler.toml` running and run:
 
