@@ -1,4 +1,4 @@
-import {parseUvf,unlockUvf,openUvf,uvfReadDirectory,type UvfMetadata} from './uvf';
+import {parseUvf,unlockUvf,openUvf,uvfReadDirectory,UVF_MAX_CLEAR,type UvfMetadata} from './uvf';
 import {sha256} from '@noble/hashes/sha2.js';
 import {MIGRATION_MARKER} from './filesystem';
 import { concat, digest, fromBase64, random, toBase64, toBase64Url, utf8, type Bytes } from './bytes';
@@ -23,18 +23,18 @@ export class Vault {
   constructor(source: Source) { this.storage = createStorage(source); }
   async prepare(allowIncomplete=false): Promise<VaultInfo> {
     if(!allowIncomplete){let pending=false;try{await this.storage.file(MIGRATION_MARKER);pending=true;}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}if(pending)throw new Error('This vault is an incomplete migration. Your original vault is unchanged. Remove the incomplete destination and start a new migration.');}
-    let configText = '';
-    try { configText = await readSmall(this.storage, 'vault.cryptomator'); }
+    let configText = '',hasConfig=false;
+    try { configText = await readSmall(this.storage, 'vault.cryptomator');hasConfig=true; }
     catch (e) { if (!(e instanceof DOMException && e.name === 'NotFoundError')) throw e; }
-    let uvfText='';
-    try{uvfText=await readSmall(this.storage,'vault.uvf',1024*1024);}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}
-    if(uvfText){
+    let uvfText='',hasUvf=false;
+    try{uvfText=await readSmall(this.storage,'vault.uvf',1024*1024);hasUvf=true;}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}
+    if(hasUvf){
       let legacy=false;try{await this.storage.file('masterkey.cryptomator');legacy=true;}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}
-      if(configText||legacy)throw new Error('This folder contains both UVF and Cryptomator metadata. Select a vault with one format.');
+      if(hasConfig||legacy)throw new Error('This folder contains both UVF and Cryptomator metadata. Select a vault with one format.');
       this.uvf=parseUvf(uvfText);this.metadataText=uvfText;
       this.info={id:toBase64Url(await digest(utf8('uvf:v1:'+uvfText))),name:this.storage.name,family:'uvf',format:1,cipherCombo:'AES-256-GCM-32k'};return this.info;
     }
-    if (configText) this.config = parseConfiguration(configText);
+    if (hasConfig) this.config = parseConfiguration(configText);
     const masterText = await readSmall(this.storage, this.config?.keyPath ?? 'masterkey.cryptomator');
     this.master = parseMasterkey(masterText);
     if (!this.config && this.master.version !== 7) throw new Error('Select the vault root containing vault.cryptomator and masterkey.cryptomator. Legacy formats before 7 are not supported.');
@@ -93,7 +93,7 @@ export class Vault {
             folders++;if(seen.has(entry.directoryId!)){issues.push(`${path}: duplicate or cyclic directory identity.`);continue;}seen.add(entry.directoryId!);queue.push({id:entry.directoryId!,path,depth:current.depth+1});
           }else{
             files++;bytes+=entry.size;if(!Number.isSafeInteger(bytes))throw new Error('Vault size exceeds the supported range.');
-            if(target==='uvf'&&Math.floor(entry.size/32740)+1>2**32)issues.push(`${path}: file exceeds the UVF size limit.`);
+            if(target==='uvf'&&entry.size>UVF_MAX_CLEAR)issues.push(`${path}: file exceeds the UVF size limit.`);
             // Authenticate every source chunk during preflight, including empty files.
             for(let start=0;start<entry.size||start===0;start+=4*1024*1024){check();try{const clear=await this.read(entry.id,start,Math.min(entry.size,start+4*1024*1024));clear.fill(0);}catch(e){issues.push(`${path}: ${e instanceof Error?e.message:'Unreadable file.'}`);break;}if(!entry.size)break;}
             if(target==='uvf'&&entry.kind==='symlink'){
@@ -232,6 +232,7 @@ export class Vault {
     await this.checkMetadata();
     if (this.imports.size || this.write) throw new Error('Another vault write is in progress.');
     if (!Number.isSafeInteger(size) || size < 0 || (material.combo==='UVF'?Math.floor(size/chunkSize(material.combo))+1:Math.ceil(size/chunkSize(material.combo))) > 2 ** 32) throw new Error('Unsupported file size.');
+    if(material.combo==='UVF'&&size>UVF_MAX_CLEAR)throw new Error('UVF file exceeds the format size limit.');
     const original=validateName(filename);
     const listing=await this.list(directoryId), folder=await directoryPath(directoryId,material);
     const names=new Set(listing.entries.map(entry=>entry.name.normalize('NFC').toLowerCase()));

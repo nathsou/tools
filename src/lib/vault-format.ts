@@ -1,7 +1,7 @@
 /** Format boundary: shared vault operations never infer a format from key sizes. */
 import * as cm from './crypto';
 import * as uvf from './uvf';
-import {concat,random,toBase64Url,utf8,type Bytes} from './bytes';
+import {concat,random,utf8,type Bytes} from './bytes';
 export {parseConfiguration,parseMasterkey,unlockMasterkey,verifyConfiguration,verifyMasterkeyVersion,createMaterial,validateName,paddedBase64Url} from './crypto';
 export type {ParsedConfiguration,MasterkeyFile,FileHeader} from './crypto';
 export type Material=cm.Material|uvf.UvfMaterial;
@@ -28,4 +28,3 @@ export async function createDirectory(m:Material){
   const id=crypto.randomUUID(),h=await cm.encryptHeader(m);
   return {id,path:await cm.directoryPath(id,m),marker:utf8(id),backup:concat(h.bytes,await cm.encryptChunk(utf8(id),0,h.header,m)),backupName:'dirid.c9r'};
 }
-export const sessionToken=()=>toBase64Url(random(16));

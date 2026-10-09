@@ -61,6 +61,8 @@ export async function migrateVault(options:MigrationOptions):Promise<FileSystemD
     }
     const unchanged=await source.migrationInventory(family);signal.throwIfAborted();
     if(unchanged.issues.length||unchanged.fingerprint!==inventory.fingerprint)throw new Error('The source changed during migration. The copy is incomplete; repeat from a stable source.');
+    const final=await destination.migrationInventory(family);signal.throwIfAborted();
+    if(final.issues.length||final.fingerprint!==actual.fingerprint)throw new Error('The destination changed during verification. The copy is incomplete.');
     await root.removeEntry(MIGRATION_MARKER);complete=true;
     progress({stage:'complete',path:'',completed:inventory.items.length,total:inventory.items.length});return root;
   });}catch(error){

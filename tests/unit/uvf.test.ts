@@ -1,7 +1,7 @@
 import {describe,test,expect} from 'bun:test';
 import {Vault} from '../../src/lib/vault';
 import {concat,text} from '../../src/lib/bytes';
-import {generateUvf,parseUvf,uvfCleartextSize,unlockUvf,destroyUvf} from '../../src/lib/uvf';
+import {generateUvf,parseUvf,uvfCleartextSize,unlockUvf,destroyUvf,UVF_MAX_CLEAR} from '../../src/lib/uvf';
 import {uvfFixture,uvfPassword,decryptUvfReference} from '../../scripts/reference-uvf';
 import type {Source} from '../../src/lib/types';
 const source=(files:Map<string,Uint8Array>):Source=>({type:'files',name:'UVF test',files:[...files].map(([path,b])=>({path,file:new File([Uint8Array.from(b)],path.split('/').at(-1)!)}))});
@@ -58,5 +58,22 @@ describe('UVF independent interoperability',()=>{
   test('an incomplete migration is blocked and preflight can be cancelled',async()=>{
     const {vault,files}=await fixture();files.set('.crypte-migration-incomplete',Buffer.from('pending'));const pending=new Vault(source(files));await expect(pending.prepare()).rejects.toThrow('incomplete migration');
     const scan=vault.migrationInventory('cryptomator');vault.cancelInventory();await expect(scan).rejects.toThrow('cancelled');vault.lock();
+  });
+  test('empty or ambiguous format markers never silently fall back',async()=>{
+    const files=uvfFixture().files;files.set('vault.cryptomator',Buffer.alloc(0));await expect(new Vault(source(files)).prepare()).rejects.toThrow('both UVF and Cryptomator');
+    await expect(new Vault(source(new Map([['vault.uvf',Buffer.alloc(0)]]))).prepare()).rejects.toThrow('Invalid vault.uvf');
+  });
+  test('size validation enforces EOF structure and the published maximum',()=>{
+    for(const size of [0,68,95,68+32768,68+32768+27])expect(()=>uvfCleartextSize(size)).toThrow();
+    expect(uvfCleartextSize(96)).toBe(0);const maximum=68+(2**32-1)*32768+28;expect(uvfCleartextSize(maximum)).toBe(UVF_MAX_CLEAR);expect(()=>uvfCleartextSize(maximum+1)).toThrow('size limit');
+  });
+  test('metadata authentication, unknown recipients and conflicting protected fields fail closed',async()=>{
+    const data=uvfFixture(),bad=structuredClone(data.meta);bad.tag=Buffer.alloc(16).toString('base64url');
+    await expect(unlockUvf(parseUvf(JSON.stringify(bad)),uvfPassword)).rejects.toThrow('authentication');
+    const unsupported=structuredClone(data.meta);unsupported.recipients[0].header.alg='ECDH-ES+A256KW';await expect(unlockUvf(parseUvf(JSON.stringify(unsupported)),uvfPassword)).rejects.toThrow('no supported password');
+    const mixed=structuredClone(data.meta);mixed.recipients.unshift(unsupported.recipients[0]);const m=await unlockUvf(parseUvf(JSON.stringify(mixed)),uvfPassword);destroyUvf(m);
+    for(const field of [{zip:'DEF'},{alg:'dir'},{kid:'org.example.key'},{'uvf.spec.version':2}]){
+      const meta=structuredClone(data.meta);const header=JSON.parse(Buffer.from(meta.protected,'base64url').toString());meta.protected=Buffer.from(JSON.stringify({...header,...field})).toString('base64url');expect(()=>parseUvf(JSON.stringify(meta))).toThrow();
+    }
   });
 });

@@ -4,6 +4,7 @@ import {validateName,type FileHeader,type VaultBootstrap} from './crypto';
 
 // UVF v1, encryption-alliance/unified-vault-format @ ed54be8.
 export const UVF_CHUNK=32740;
+export const UVF_MAX_CLEAR=140617229238300;
 const PASSWORD_ALG='PBES2-HS512+A256KW';
 const PASSWORD_ITERATIONS=600000;
 interface Recipient {header:Record<string,unknown>;encrypted_key:string;}
@@ -145,7 +146,8 @@ export async function uvfDecryptChunk(bytes:Bytes,index:number,h:FileHeader):Pro
 export function uvfCleartextSize(size:number):number{
   const body=size-68,remainder=body%32768;
   if(!Number.isSafeInteger(size)||body<28||remainder<28||Math.floor(body/32768)+1>2**32)throw new Error('Truncated UVF file or missing EOF block.');
-  return Math.floor(body/32768)*UVF_CHUNK+remainder-28;
+  const clear=Math.floor(body/32768)*UVF_CHUNK+remainder-28;
+  if(clear>UVF_MAX_CLEAR)throw new Error('UVF file exceeds the format size limit.');return clear;
 }
 export async function uvfSmallFile(bytes:Bytes,m:UvfMaterial,seedId=m.payload.latestSeed):Promise<Bytes>{
   const h=await uvfEncryptHeader(m,seedId),chunks=[h.bytes];

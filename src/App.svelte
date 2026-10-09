@@ -520,12 +520,12 @@
             <VaultFormatChoice bind:value={createFamily} disabled={busy}/>
             <label class="input-label" for="create-name">Vault name</label><input id="create-name" bind:value={createName} required disabled={busy} placeholder="My vault"/>
             <button type="button" class="secondary-button" onclick={chooseCreationLocation} disabled={busy}>Choose vault location</button>
-            <p class="setting-note">{createParent?`New folder: ${createParent.name} / ${createName||'My vault'}`:'The encrypted vault will be saved in a new folder at this location.'}</p>
+            <p class="setting-note">{createParent?`New folder: ${createParent.name||'Selected location'} / ${createName||'My vault'}`:'The encrypted vault will be saved in a new folder at this location.'}</p>
             <label class="input-label" for="create-password">New vault password</label><input id="create-password" type="password" bind:value={createPassword} autocomplete="new-password" required disabled={busy}/>
             <label class="input-label" for="create-confirm">Confirm vault password</label><input id="create-confirm" type="password" bind:value={createConfirm} autocomplete="new-password" required disabled={busy}/>
             <p class="setting-note">Keep your password safe. Crypte cannot recover a forgotten password.</p>
             <label class="remember-option"><input type="checkbox" bind:checked={remember} disabled={busy}/>Remember this vault on this device</label>
-            <button class="primary-button" type="submit" disabled={busy||!createParent||!createName||!createPassword||!createConfirm}>{busy?`Creating vault… ${Math.round(progress*100)}%`:'Create vault'}</button>
+            <button class="primary-button" type="submit" disabled={busy||!createParent||!createName||!createPassword||!createConfirm}>{busy?(createFamily==='uvf'?'Creating encrypted vault…':`Creating vault… ${Math.round(progress*100)}%`):'Create vault'}</button>
           </form>
           <button class="text-button choose-another" disabled={busy} onclick={()=>{creating=false;createPassword=createConfirm='';error='';}}>Cancel</button>
         {:else if info}
@@ -533,7 +533,7 @@
           <form onsubmit={unlockPassword}>
             <label class="input-label" for="vault-password">Vault password</label><div class="password-input"><Icon name="lock" size={17}/><input id="vault-password" type={showPassword?'text':'password'} bind:value={password} autocomplete="current-password" placeholder="Enter your password" disabled={busy}/><button type="button" class="text-button password-toggle" aria-label={showPassword?'Hide password':'Show password'} aria-pressed={showPassword} onclick={()=>showPassword=!showPassword}>{showPassword?'Hide':'Show'}</button></div>
             <label class="remember-option"><input type="checkbox" bind:checked={remember}/>Remember this vault on this device</label>
-            <button class="primary-button" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner small"></span>Unlocking {Math.round(progress*100)}%{:else}Unlock vault<Icon name="arrow" size={18}/>{/if}</button>
+            <button class="primary-button" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner small"></span>Unlocking{info.family==='uvf'?'…':` ${Math.round(progress*100)}%`}{:else}Unlock vault<Icon name="arrow" size={18}/>{/if}</button>
           </form>
           <button class="text-button choose-another" onclick={chooseVault} disabled={busy}>Choose a different vault</button>
           <div class="vault-format"><strong>{info.family==='uvf'?'UVF':'Cryptomator'}</strong> <span>·</span> Format {info.format}<span>·</span>{source?.type==='handle'?'Read & write':'Read only'}</div>
@@ -550,7 +550,7 @@
   </div>
 {:else if client && info}
   <div class="app-shell" inert={settings||Boolean(manager)||Boolean(conversionEntry)||migrationOpen}>
-    <header class="app-header"><button class="brand" onclick={closeVault}><span class="brand-icon"><Icon name="lock" size={19}/></span>Crypte<span class="brand-dot">.</span></button><span class="header-divider"></span><div class="header-vault"><Icon name="folder" size={17}/><span>{info.name}</span><span class="vault-status">{info.family==='uvf'?'UVF':'Cryptomator'}</span></div><div class="app-header-actions"><span class="local-label"><span></span>Local files</span><button class="small-button migrate-button" onclick={openMigration} disabled={writeDisabled||converting} title="Create a verified copy in another vault format"><Icon name="move" size={16}/><span>Migrate vault</span></button><button class="icon-button" title="Preferences" onclick={openSettings}><Icon name="settings" size={19}/></button><button class="lock-button" onclick={lock}><Icon name="lock" size={15}/>Lock vault</button></div></header>
+    <header class="app-header"><button class="brand" onclick={closeVault}><span class="brand-icon"><Icon name="lock" size={19}/></span>Crypte<span class="brand-dot">.</span></button><span class="header-divider"></span><div class="header-vault"><Icon name="folder" size={17}/><span>{info.name}</span><span class="vault-status">{info.family==='uvf'?'UVF':'Cryptomator'}</span></div><div class="app-header-actions"><span class="local-label"><span></span>Local files</span><button class="small-button migrate-button" aria-label="Migrate vault" onclick={openMigration} disabled={writeDisabled||converting} title={source?.type==='handle'?'Create a verified copy in another vault format':'Migration requires native folder access in a compatible browser'}><Icon name="move" size={16}/><span>Migrate vault</span></button><button class="icon-button" title="Preferences" onclick={openSettings}><Icon name="settings" size={19}/></button><button class="lock-button" onclick={lock}><Icon name="lock" size={15}/>Lock vault</button></div></header>
     <div class="app-body">
       <aside class="sidebar">
         <div class="sidebar-section-label">YOUR VAULT</div>
@@ -600,7 +600,7 @@
 
 {#if unlocked && client && source?.type==='handle'}{#each conversions as job (job.id)}<ConversionDialog entry={job.entry} {client} root={source.handle} {streaming} active={activeConversion===job.id} onstatus={(status,progress)=>{job.status=status;job.progress=progress;}} onbackground={backgroundConversion} onclose={()=>removeConversion(job.id)} onlock={lock} oncommit={(result,remove,stamp,signal)=>commitConversion(job,result,remove,stamp,signal)}/>{/each}{/if}
 
-{#if migrationOpen && unlocked && client && info && source?.type==='handle'}<MigrationDialog {client} {info} root={source.handle} onclose={()=>migrationOpen=false} onopen={root=>{migrationOpen=false;void loadSource({type:'handle',handle:root});}} onbusy={value=>migrationBusy=value}/>{/if}
+{#if migrationOpen && unlocked && client && info && source?.type==='handle'}<MigrationDialog {client} {info} root={source.handle} onclose={()=>migrationOpen=false} onopen={root=>{migrationOpen=false;void loadSource({type:'handle',handle:root});}} onbusy={value=>migrationBusy=value} onlock={lock}/>{/if}
 
 {#if manager && unlocked && client && info}<FileActionsDialog action={manager.action} targets={manager.targets} {client} vaultName={info.name} parentId={currentDirectory} {hideDotfiles} busy={mutating} onconfirm={confirmActions} oncancel={closeManager}/>{/if}
 
