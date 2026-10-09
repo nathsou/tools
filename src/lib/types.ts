@@ -7,6 +7,8 @@ export interface VaultEntry {
   size: number; modified: number; mime: string; error?: string;
 }
 export interface Listing { entries: VaultEntry[]; warnings: string[]; }
+export interface MigrationItem {path:string;parentId:string;entry:VaultEntry;}
+export interface MigrationInventory {items:MigrationItem[];fingerprint:string;issues:string[];bytes:number;files:number;folders:number;}
 export interface ImportPlan { id:string; name:string; nodePath:string; encryptedName:string; shortened:boolean; size:number; header:Uint8Array<ArrayBuffer>; payloadName?:string; }
 export type WriteRequest={kind:'mkdir';parentId:string;name:string}|{kind:'move';parentId:string;entryId:string;targetId:string;name:string}|{kind:'delete';parentId:string;entryId:string};
 export interface FileStamp {path:string;size:number;modified:number;}

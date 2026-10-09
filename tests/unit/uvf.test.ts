@@ -49,4 +49,14 @@ describe('UVF independent interoperability',()=>{
     const b=await generateUvf('new password'),files=new Map([['vault.uvf',new TextEncoder().encode(b.configuration)],[`${b.rootPath}/dir.uvf`,b.backup]]),vault=new Vault(source(files));await vault.prepare();await vault.unlock('new password');expect(await vault.list('')).toEqual({entries:[],warnings:[]});vault.lock();
     const material=await unlockUvf(parseUvf(b.configuration),'new password');expect(material.raw).toHaveLength(32);destroyUvf(material);expect(material.raw.every(b=>b===0)).toBe(true);
   });
+  test('migration inventories authenticate the full tree and have stable ciphertext fingerprints',async()=>{
+    const {vault,files}=await fixture(),first=await vault.migrationInventory('cryptomator'),second=await vault.migrationInventory('cryptomator');
+    expect(first.issues).toEqual([]);expect(first.fingerprint).toBe(second.fingerprint);expect(first.files).toBe(6);expect(first.folders).toBe(1);expect(first.items.some(i=>i.path==='New folder/café.txt')).toBe(true);
+    const changed=new Map(files),path=[...changed.keys()].find(p=>p.endsWith('symlink.uvf'))!,bytes=Buffer.from(changed.get(path)!);bytes[bytes.length-1]^=1;changed.set(path,bytes);
+    const broken=new Vault(source(changed));await broken.prepare();await broken.unlock(uvfPassword);const report=await broken.migrationInventory('cryptomator');expect(report.issues.some(i=>i.includes('authentication'))).toBe(true);expect(report.fingerprint).not.toBe(first.fingerprint);vault.lock();broken.lock();
+  });
+  test('an incomplete migration is blocked and preflight can be cancelled',async()=>{
+    const {vault,files}=await fixture();files.set('.crypte-migration-incomplete',Buffer.from('pending'));const pending=new Vault(source(files));await expect(pending.prepare()).rejects.toThrow('incomplete migration');
+    const scan=vault.migrationInventory('cryptomator');vault.cancelInventory();await expect(scan).rejects.toThrow('cancelled');vault.lock();
+  });
 });

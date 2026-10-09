@@ -1,4 +1,6 @@
 import {parseUvf,unlockUvf,openUvf,uvfReadDirectory,type UvfMetadata} from './uvf';
+import {sha256} from '@noble/hashes/sha2.js';
+import {MIGRATION_MARKER} from './filesystem';
 import { concat, digest, fromBase64, random, toBase64, toBase64Url, utf8, type Bytes } from './bytes';
 import { chunkSize, layout, createDirectory, chunkOverhead, cleartextSize, createMaterial, decryptChunk, decryptHeader, decryptName, destroyMaterial, directoryPath, encryptChunk, encryptHeader, encryptName, headerSize, paddedBase64Url, parseConfiguration, parseMasterkey, unlockMasterkey, validateName, verifyConfiguration, verifyMasterkeyVersion, type FileHeader, type MasterkeyFile, type Material, type ParsedConfiguration } from './vault-format';
 import { createStorage, isFilesystemMetadata, readSmall, type VaultStorage } from './filesystem';
@@ -9,6 +11,7 @@ export class Vault {
   private config?: ParsedConfiguration;
   private uvf?: UvfMetadata;
   private metadataText='';
+  private inventorySequence=0;
   private master!: MasterkeyFile;
   private material?: Material;
   private headers = new Map<string, { file:File; header:FileHeader }>();
@@ -18,7 +21,8 @@ export class Vault {
   private write?:{plan:WritePlan;request:WriteRequest};
   info!: VaultInfo;
   constructor(source: Source) { this.storage = createStorage(source); }
-  async prepare(): Promise<VaultInfo> {
+  async prepare(allowIncomplete=false): Promise<VaultInfo> {
+    if(!allowIncomplete){let pending=false;try{await this.storage.file(MIGRATION_MARKER);pending=true;}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}if(pending)throw new Error('This vault is an incomplete migration. Your original vault is unchanged. Remove the incomplete destination and start a new migration.');}
     let configText = '';
     try { configText = await readSmall(this.storage, 'vault.cryptomator'); }
     catch (e) { if (!(e instanceof DOMException && e.name === 'NotFoundError')) throw e; }
@@ -54,6 +58,56 @@ export class Vault {
   private async checkMetadata():Promise<void>{
     if(this.uvf&&await readSmall(this.storage,'vault.uvf',1024*1024)!==this.metadataText)throw new Error('Vault metadata changed. Lock and reopen the vault before writing.');
   }
+  async migrationInventory(target:import('./types').VaultFamily):Promise<import('./types').MigrationInventory>{
+    const ticket=++this.inventorySequence,check=()=>{this.unlocked();if(ticket!==this.inventorySequence)throw new Error('Vault check cancelled.');};
+    const material=this.unlocked(),items:import('./types').MigrationItem[]=[],issues:string[]=[],hash=sha256.create();
+    const queue=[{id:'',path:'',depth:0}],seen=new Set(['']);let bytes=0,files=0,folders=0;
+    const add=async(path:string)=>{
+      const file=await this.storage.file(path),h=sha256.create();
+      try{for(let offset=0;offset<file.size;offset+=4*1024*1024){check();h.update(new Uint8Array(await file.slice(offset,offset+4*1024*1024).arrayBuffer()));}
+        hash.update(utf8(JSON.stringify([path,file.size,toBase64Url(h.digest())])));
+      }finally{h.destroy();}
+    };
+    try{
+      for(const path of this.uvf?['vault.uvf']:this.config?['vault.cryptomator',this.config.keyPath]:['masterkey.cryptomator'])await add(path);
+      for(let index=0;index<queue.length;index++){
+        check();
+        const current=queue[index];if(current.depth>128||items.length>100000)throw new Error('The vault is too large or deeply nested to migrate safely.');
+        const listing=await this.list(current.id),names=new Set<string>();issues.push(...listing.warnings.map(w=>`${current.path||'/'}: ${w}`));
+        const storagePath=await directoryPath(current.id,material);
+        // Include directory metadata and name mappings in the source snapshot.
+        for(const node of (await this.storage.list(storagePath)).sort((a,b)=>a.name.localeCompare(b.name))){
+          if(isFilesystemMetadata(node)||!(node.name===layout(material).backup||node.name.endsWith(layout(material).extension)||(material.combo!=='UVF'&&node.name.endsWith('.c9s'))))continue;
+          const path=`${storagePath}/${node.name}`;
+          if(node.kind==='file')await add(path);
+          else for(const child of (await this.storage.list(path)).sort((a,b)=>a.name.localeCompare(b.name))){if(isFilesystemMetadata(child))continue;if(child.kind!=='file'){issues.push(`${path}: unexpected nested encrypted directory.`);continue;}await add(`${path}/${child.name}`);}
+        }
+        for(const entry of listing.entries.sort((a,b)=>a.name.localeCompare(b.name))){
+          check();
+          const path=current.path?`${current.path}/${entry.name}`:entry.name;
+          try{if(validateName(entry.name)!==entry.name)throw new Error('Filename is not NFC-normalized.');if(target==='uvf'&&utf8(entry.name).length>172)throw new Error('UVF supports names up to 172 UTF-8 bytes. Shorten this name first.');}
+          catch(e){issues.push(`${path}: ${e instanceof Error?e.message:'Invalid name.'}`);}
+          const normalized=entry.name.normalize('NFC').toLowerCase();if(names.has(normalized))issues.push(`${path}: case-insensitive filename collision. Rename one of the entries first.`);names.add(normalized);
+          items.push({path,parentId:current.id,entry:{...entry}});
+          if(entry.kind==='folder'){
+            folders++;if(seen.has(entry.directoryId!)){issues.push(`${path}: duplicate or cyclic directory identity.`);continue;}seen.add(entry.directoryId!);queue.push({id:entry.directoryId!,path,depth:current.depth+1});
+          }else{
+            files++;bytes+=entry.size;if(!Number.isSafeInteger(bytes))throw new Error('Vault size exceeds the supported range.');
+            if(target==='uvf'&&Math.floor(entry.size/32740)+1>2**32)issues.push(`${path}: file exceeds the UVF size limit.`);
+            // Authenticate every source chunk during preflight, including empty files.
+            for(let start=0;start<entry.size||start===0;start+=4*1024*1024){check();try{const clear=await this.read(entry.id,start,Math.min(entry.size,start+4*1024*1024));clear.fill(0);}catch(e){issues.push(`${path}: ${e instanceof Error?e.message:'Unreadable file.'}`);break;}if(!entry.size)break;}
+            if(target==='uvf'&&entry.kind==='symlink'){
+              if(entry.size>1024*1024)issues.push(`${path}: symlink target is too large.`);
+              else try{const clear=await this.read(entry.id,0,entry.size);try{const target=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(target!==target.normalize('NFC'))issues.push(`${path}: symlink target is not NFC-normalized.`);}finally{clear.fill(0);}}catch{issues.push(`${path}: invalid symlink target.`);}
+            }
+          }
+        }
+      }
+      check();if(this.material!==material)throw new Error('The vault was locked.');
+      return {items,fingerprint:toBase64Url(hash.digest()),issues,bytes,files,folders};
+    }finally{hash.destroy();}
+  }
+  cancelInventory():void {this.inventorySequence++;}
   private async unlockRaw(raw: Bytes): Promise<VaultInfo> {
     if(this.uvf)return this.acceptUvf(await openUvf(this.uvf,raw));
     if (this.config) await verifyConfiguration(this.config, raw);
@@ -72,6 +126,10 @@ export class Vault {
     // A refresh must reopen File snapshots and reauthenticate their headers.
     this.headers.clear();
     const path = await directoryPath(directoryId, material), format=layout(material);
+    if(material.combo==='UVF'){
+      const backup=await this.storage.file(`${path}/dir.uvf`);
+      if(backup.size!==128||await uvfReadDirectory(new Uint8Array(await backup.arrayBuffer()),material)!==path)throw new Error('UVF directory backup does not match its identity.');
+    }
     const nodes = await this.storage.list(path);
     const entries: VaultEntry[] = [], warnings: string[] = [];
     for (const node of nodes) {
@@ -88,6 +146,10 @@ export class Vault {
         name = decryptName(cipherName.slice(0,-4), directoryId, material);
         if (node.kind === 'directory') {
           const children = await this.storage.list(nodePath);
+          if(material.combo==='UVF'){
+            const metadata=children.filter(n=>!isFilesystemMetadata(n));
+            if(metadata.length!==1||metadata[0].kind!=='file'||![format.directory,format.symlink].includes(metadata[0].name))throw new Error('Invalid or ambiguous UVF entry metadata.');
+          }
           if (children.some(n => n.name === format.directory && n.kind === 'file')) {
             let id:string;
             if(material.combo==='UVF'){
@@ -356,6 +418,7 @@ export class Vault {
     try { return await this.unlockRaw(raw); } finally { raw.fill(0); }
   }
   lock(): void {
+    this.cancelInventory();
     for(const job of this.imports.values())job.pending.fill(0);
     if (this.material) destroyMaterial(this.material);
     this.material = undefined; this.cacheKey=undefined; this.headers.clear(); this.files.clear(); this.imports.clear(); this.directories = new Set(['']);this.write=undefined;

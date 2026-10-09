@@ -2,6 +2,8 @@
   import { onMount, tick, untrack } from 'svelte';
   import {persistVault} from './lib/creation';
   import Icon from './components/Icon.svelte';
+  import VaultFormatChoice from './components/VaultFormatChoice.svelte';
+  import MigrationDialog from './components/MigrationDialog.svelte';
   import Thumbnail from './components/Thumbnail.svelte';
   import ConversionDialog from './components/ConversionDialog.svelte';
   import {sourceStamp,type ConvertedMedia} from './lib/conversion';
@@ -31,6 +33,7 @@
   let conversions=$state<ConversionJob[]>([]),activeConversion=$state(''),tab=$state<'files'|'conversions'>('files');
   const conversionEntry=$derived(conversions.find(job=>job.id===activeConversion)?.entry);
   const converting=$derived(conversions.some(job=>job.status==='Converting'||job.status==='Queued'||job.status==='Saving encrypted copy'));
+  let createFamily=$state<import('./lib/types').VaultFamily>('cryptomator'),showPassword=$state(false),migrationOpen=$state(false),migrationBusy=$state(false);
   let creating=$state(false),createName=$state(''),createPassword=$state(''),createConfirm=$state(''),createParent=$state<FileSystemDirectoryHandle>(),creationController:AbortController|undefined;
   let backgroundMinutes=$state(1),keepDuringConversions=$state(false);
   let source = $state<Source>();
@@ -71,7 +74,7 @@
   }));
   const fileCount = $derived(browsable.filter(e=>e.kind !== 'folder').length);
   const folderCount = $derived(browsable.length-fileCount);
-  const writeDisabled=$derived(source?.type!=='handle'||busy||loading||importing||scanningImport||mutating);
+  const writeDisabled=$derived(source?.type!=='handle'||busy||loading||importing||scanningImport||mutating||migrationBusy);
   const markedEntries=$derived(browsable.filter(entry=>marked.includes(entry.id)));
 
   function message(e:unknown):string { return e instanceof Error ? e.message : 'Something went wrong. Please try again.'; }
@@ -88,6 +91,7 @@
     editor?.discard();editor=undefined;return true;
   }
   function canRestoreView(target:AppView|undefined):boolean {
+    if(migrationOpen)return false;
     return !conversionEntry&&target?.kind==='vault'&&target.tab===tab&&target.selectedId===selected?.id&&target.breadcrumbs.at(-1)?.id===currentDirectory&&!savingText || canLeaveEditor();
   }
   async function restoreView(target:AppView|undefined) {
@@ -127,7 +131,7 @@
   }
   async function refreshRecents() { try { recents = (await getRecents()).toSorted((a,b)=>b.opened-a.opened).slice(0,6); } catch { /* Storage is optional. */ } }
   function clearSession() {
-    navigation++; creationController?.abort();creationController=undefined;createPassword=createConfirm='';authController?.abort(); importController?.abort(); mutationController?.abort();textSaveController?.abort();client?.close(); client=undefined;
+    migrationOpen=false;migrationBusy=false;showPassword=false;navigation++; creationController?.abort();creationController=undefined;createPassword=createConfirm='';authController?.abort(); importController?.abort(); mutationController?.abort();textSaveController?.abort();client?.close(); client=undefined;
     editor=undefined;savingText=false;textSaveController=undefined;conversions=[];activeConversion='';tab='files';convertingSave=false;selecting=false;selectionAnchor=undefined;
     clearThumbnailCache();stopMedia(); unlocked=false; entries=[]; selected=undefined; expanded=false; password=''; progress=0;
     breadcrumbs=[{ name:'All files',id:'' }]; warnings=[]; busy=false; loading=false; settings=false; search=''; filter='all'; importing=false; importProgress=0; importName='';
@@ -154,6 +158,7 @@
     } catch (e) { if (client === active) { error=message(e); active.close(); client=undefined; source=undefined; } }
     finally { if (client === active || !client) busy=false; }
   }
+  function openMigration(){if(writeDisabled||converting||!canLeaveEditor())return;settings=false;selected=undefined;migrationOpen=true;}
   function startCreation(){navigation++;creating=true;error=notice='';createPassword=createConfirm='';}
   async function chooseCreationLocation(){
     if(!window.showDirectoryPicker)return;
@@ -162,12 +167,12 @@
   }
   async function createVault(event:SubmitEvent){
     event.preventDefault();if(busy||!createParent)return;
-    if(!createPassword||createPassword.normalize('NFC')!==createConfirm.normalize('NFC')){error='Passwords must match.';return;}
+    if(!createPassword||(createFamily==='uvf'?createPassword!==createConfirm:createPassword.normalize('NFC')!==createConfirm.normalize('NFC'))){error='Passwords must match.';return;}
     const input=createPassword;createPassword=createConfirm='';busy=true;error=notice='';progress=0;
     const active=new VaultClient(),controller=new AbortController();creationController=controller;
     let created:FileSystemDirectoryHandle|undefined;
     try{
-      const bootstrap=await active.generate(input,p=>progress=p);controller.signal.throwIfAborted();
+      const bootstrap=await active.generate(input,p=>progress=p,createFamily);controller.signal.throwIfAborted();
       created=await persistVault(createParent,createName,bootstrap,controller.signal);controller.signal.throwIfAborted();
       // The completed vault survives optional browser-storage or unlock failures.
       creationController=undefined;await loadSource({type:'handle',handle:created});creating=false;
@@ -432,6 +437,7 @@
   }
   function keyboard(event:KeyboardEvent) {
     activity();
+    if(migrationOpen)return;
     if(conversionEntry){if(event.key==='Escape')closeConversion();return;}
     if(manager){if(event.key==='Escape')closeManager();return;}
     if(event.key==='Escape'&&menu){menu='';return;}
@@ -471,7 +477,7 @@
     const hidden=()=>scheduleBackgroundLock();
     const exit=()=>clearSession();
     document.addEventListener('visibilitychange',hidden); window.addEventListener('pagehide',exit);
-    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy){event.preventDefault();event.returnValue='';}};
+    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy||migrationBusy){event.preventDefault();event.returnValue='';}};
     window.addEventListener('beforeunload',beforeExit);
     return ()=>{streamAttempt++;navigator.serviceWorker?.removeEventListener('controllerchange',controlled);appearance.removeEventListener('change',updateAppearance); document.removeEventListener('visibilitychange',hidden); window.removeEventListener('pagehide',exit);window.removeEventListener('beforeunload',beforeExit); clearSession();appHistory?.destroy();appHistory=undefined; };
   });
@@ -497,20 +503,21 @@
     <main class="welcome-main">
       <section class="welcome-story">
         <div class="eyebrow"><span class="tiny-line"></span>LOCAL VAULT MANAGER</div>
-        <h1>Cryptomator<br/>vault manager.</h1>
-        <p class="welcome-description">Create or open an encrypted vault to organize files and preview text, images, audio, and video.</p>
+        <h1>Your files.<br/><em>Your vault.</em></h1>
+        <p class="welcome-description">A private home for your files. Open, create, and move between Cryptomator and UVF vaults — right on your device.</p>
         <div class="vault-illustration" aria-hidden="true"><div class="illustration-orbit orbit-one"></div><div class="illustration-orbit orbit-two"></div><div class="floating-card floating-photo"><svg viewBox="0 0 140 110"><rect width="140" height="110" rx="8" fill="#e3e6d7"/><circle cx="104" cy="29" r="13" fill="#c8d3ae"/><path d="M0 105l44-68 40 56 25-33 31 45" fill="#5c7566"/><path d="M44 37l-11 17 22-1" fill="#f9faf5"/></svg></div><div class="illustrated-vault"><div class="vault-handle"><Icon name="lock" size={50}/></div><span>ENCRYPTED VAULT</span></div><div class="floating-card floating-text"><div></div><div></div><div></div><div></div></div><span class="illustration-spark spark-one">✳</span><span class="illustration-spark spark-two">+</span></div>
         <div class="privacy-points"><span><Icon name="shield" size={18}/>Never uploaded</span><span><Icon name="folder" size={18}/>Local folder access</span><span><Icon name="cloud" size={18}/>No account needed</span></div>
       </section>
       <section class="unlock-card">
-        <div class="card-eyebrow">{info ? 'LOCKED VAULT' : 'OPEN VAULT'}</div>
+        <div class="card-eyebrow">{creating ? 'NEW VAULT' : info ? 'LOCKED VAULT' : 'OPEN VAULT'}</div>
         <div class="unlock-emblem"><Icon name={info ? 'lock' : 'folder'} size={28}/></div>
         <h2>{creating?'Create a vault':info ? info.name : 'Open a vault'}</h2>
-        <p>{creating?'Choose a name, location and password for your new vault.':info ? 'Enter your password to browse the vault.' : 'Choose the folder that contains your encrypted Cryptomator vault.'}</p>
+        <p>{creating?'Choose a name, location and password for your new vault.':info ? 'Enter your password to browse the vault.' : 'Choose your Cryptomator or UVF vault folder. Crypte detects its format automatically.'}</p>
         {#if error}<div class="error-banner" role="alert">{error}</div>{/if}
         {#if notice}<div class="notice-banner" role="status">{notice}</div>{/if}
         {#if creating}
           <form onsubmit={createVault} class="create-vault-form">
+            <VaultFormatChoice bind:value={createFamily} disabled={busy}/>
             <label class="input-label" for="create-name">Vault name</label><input id="create-name" bind:value={createName} required disabled={busy} placeholder="My vault"/>
             <button type="button" class="secondary-button" onclick={chooseCreationLocation} disabled={busy}>Choose vault location</button>
             <p class="setting-note">{createParent?`New folder: ${createParent.name} / ${createName||'My vault'}`:'The encrypted vault will be saved in a new folder at this location.'}</p>
@@ -524,12 +531,12 @@
         {:else if info}
           {#if passkey}<button class="primary-button passkey-unlock" onclick={unlockWithPasskey} disabled={busy}><Icon name="fingerprint"/>{busy ? 'Unlocking…' : 'Unlock with passkey'}</button><div class="or-divider"><span>or use your vault password</span></div>{/if}
           <form onsubmit={unlockPassword}>
-            <label class="input-label" for="vault-password">Vault password</label><div class="password-input"><Icon name="lock" size={17}/><input id="vault-password" type="password" bind:value={password} autocomplete="current-password" placeholder="Enter your password" disabled={busy}/></div>
+            <label class="input-label" for="vault-password">Vault password</label><div class="password-input"><Icon name="lock" size={17}/><input id="vault-password" type={showPassword?'text':'password'} bind:value={password} autocomplete="current-password" placeholder="Enter your password" disabled={busy}/><button type="button" class="text-button password-toggle" aria-label={showPassword?'Hide password':'Show password'} aria-pressed={showPassword} onclick={()=>showPassword=!showPassword}>{showPassword?'Hide':'Show'}</button></div>
             <label class="remember-option"><input type="checkbox" bind:checked={remember}/>Remember this vault on this device</label>
             <button class="primary-button" type="submit" disabled={busy || !password}>{#if busy}<span class="spinner small"></span>Unlocking {Math.round(progress*100)}%{:else}Unlock vault<Icon name="arrow" size={18}/>{/if}</button>
           </form>
           <button class="text-button choose-another" onclick={chooseVault} disabled={busy}>Choose a different vault</button>
-          <div class="vault-format">Format {info.format} <span>·</span> {info.cipherCombo}</div>
+          <div class="vault-format"><strong>{info.family==='uvf'?'UVF':'Cryptomator'}</strong> <span>·</span> Format {info.format}<span>·</span>{source?.type==='handle'?'Read & write':'Read only'}</div>
         {:else}
           <button class="primary-button" onclick={chooseVault} disabled={busy}><Icon name="folder" size={19}/>{busy ? 'Opening…' : 'Choose vault folder'}<Icon name="arrow" size={18}/></button>
           <button class="secondary-button create-vault-button" onclick={startCreation} disabled={busy||!window.showDirectoryPicker}>Create new vault<Icon name="plus" size={18}/></button>
@@ -539,11 +546,11 @@
         <div class="unlock-footnote"><Icon name="shield" size={15}/><span>Your password and files stay on this device.</span></div>
       </section>
     </main>
-    <footer class="welcome-footer"><span>Local Cryptomator manager</span><span>Cryptomator formats 7 & 8 <span class="footer-separator">/</span> Works offline after installation</span></footer>
+    <footer class="welcome-footer"><span>Private by design</span><span>Cryptomator 7 & 8 · UVF 1 <span class="footer-separator">/</span> Works offline after installation</span></footer>
   </div>
 {:else if client && info}
-  <div class="app-shell" inert={settings||Boolean(manager)||Boolean(conversionEntry)}>
-    <header class="app-header"><button class="brand" onclick={closeVault}><span class="brand-icon"><Icon name="lock" size={19}/></span>Crypte<span class="brand-dot">.</span></button><span class="header-divider"></span><div class="header-vault"><Icon name="folder" size={17}/><span>{info.name}</span><span class="vault-status">Unlocked</span></div><div class="app-header-actions"><span class="local-label"><span></span>Local files</span><button class="icon-button" title="Preferences" onclick={openSettings}><Icon name="settings" size={19}/></button><button class="lock-button" onclick={lock}><Icon name="lock" size={15}/>Lock vault</button></div></header>
+  <div class="app-shell" inert={settings||Boolean(manager)||Boolean(conversionEntry)||migrationOpen}>
+    <header class="app-header"><button class="brand" onclick={closeVault}><span class="brand-icon"><Icon name="lock" size={19}/></span>Crypte<span class="brand-dot">.</span></button><span class="header-divider"></span><div class="header-vault"><Icon name="folder" size={17}/><span>{info.name}</span><span class="vault-status">{info.family==='uvf'?'UVF':'Cryptomator'}</span></div><div class="app-header-actions"><span class="local-label"><span></span>Local files</span><button class="small-button migrate-button" onclick={openMigration} disabled={writeDisabled||converting} title="Create a verified copy in another vault format"><Icon name="move" size={16}/><span>Migrate vault</span></button><button class="icon-button" title="Preferences" onclick={openSettings}><Icon name="settings" size={19}/></button><button class="lock-button" onclick={lock}><Icon name="lock" size={15}/>Lock vault</button></div></header>
     <div class="app-body">
       <aside class="sidebar">
         <div class="sidebar-section-label">YOUR VAULT</div>
@@ -592,6 +599,8 @@
 {/if}
 
 {#if unlocked && client && source?.type==='handle'}{#each conversions as job (job.id)}<ConversionDialog entry={job.entry} {client} root={source.handle} {streaming} active={activeConversion===job.id} onstatus={(status,progress)=>{job.status=status;job.progress=progress;}} onbackground={backgroundConversion} onclose={()=>removeConversion(job.id)} onlock={lock} oncommit={(result,remove,stamp,signal)=>commitConversion(job,result,remove,stamp,signal)}/>{/each}{/if}
+
+{#if migrationOpen && unlocked && client && info && source?.type==='handle'}<MigrationDialog {client} {info} root={source.handle} onclose={()=>migrationOpen=false} onopen={root=>{migrationOpen=false;void loadSource({type:'handle',handle:root});}} onbusy={value=>migrationBusy=value}/>{/if}
 
 {#if manager && unlocked && client && info}<FileActionsDialog action={manager.action} targets={manager.targets} {client} vaultName={info.name} parentId={currentDirectory} {hideDotfiles} busy={mutating} onconfirm={confirmActions} oncancel={closeManager}/>{/if}
 

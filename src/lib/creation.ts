@@ -1,9 +1,9 @@
 import {validateName,type VaultBootstrap} from './crypto';
-import {safePath} from './filesystem';
+import {safePath,MIGRATION_MARKER} from './filesystem';
 import {vaultWriteLock,writePermission} from './imports';
 
 /** Publish into a new child only; never initialize an existing directory. */
-export async function persistVault(parent:FileSystemDirectoryHandle,name:string,bootstrap:VaultBootstrap,signal:AbortSignal):Promise<FileSystemDirectoryHandle> {
+export async function persistVault(parent:FileSystemDirectoryHandle,name:string,bootstrap:VaultBootstrap,signal:AbortSignal,incomplete=false):Promise<FileSystemDirectoryHandle> {
   name=validateName(name);
   if(/[<>:"|?*]/.test(name)||/[. ]$/.test(name)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name))throw new Error('Choose a vault name compatible with Windows, macOS and Linux.');
   await writePermission(parent);signal.throwIfAborted();
@@ -21,6 +21,7 @@ export async function persistVault(parent:FileSystemDirectoryHandle,name:string,
         const saved=new Uint8Array(await(await handle.getFile()).arrayBuffer());
         if(saved.length!==bytes.length||saved.some((byte,i)=>byte!==bytes[i]))throw new Error('The new vault metadata could not be verified.');
       };
+      if(incomplete)await write(root,MIGRATION_MARKER,new TextEncoder().encode('Incomplete Crypte migration. The source vault is unchanged.'));
       if(bootstrap.family!=='uvf')await write(root,'masterkey.cryptomator',new TextEncoder().encode(bootstrap.masterkey));
       let directory=root;for(const part of safePath(bootstrap.rootPath)){signal.throwIfAborted();directory=await directory.getDirectoryHandle(part,{create:true});}
       await write(directory,bootstrap.family==='uvf'?'dir.uvf':'dirid.c9r',bootstrap.backup);

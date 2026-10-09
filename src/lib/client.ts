@@ -25,14 +25,16 @@ export class VaultClient {
       catch (e) { this.pending.delete(id); reject(e); }
     });
   }
-  prepare(source:Source):Promise<VaultInfo> {
+  prepare(source:Source,allowIncomplete=false):Promise<VaultInfo> {
     // Copy plain records at the worker boundary: Svelte's state proxies cannot be structured-cloned.
     const plain:Source = source.type === 'handle' ? { type:'handle',handle:source.handle } : { type:'files',name:source.name,files:source.files.map(({ path,file })=>({ path,file })) };
-    return this.call('prepare',[plain]);
+    return this.call('prepare',[plain,allowIncomplete]);
   }
   unlock(password:string,progress?:(p:number)=>void):Promise<VaultInfo> { return this.call('unlock',[password],progress); }
   generate(password:string,progress?:(p:number)=>void,family:import('./types').VaultFamily='cryptomator'):Promise<VaultBootstrap> {return this.call('generate',[password,family],progress);}
   list(id:string):Promise<Listing> { return this.call('list',[id]); }
+  migrationInventory(target:import('./types').VaultFamily):Promise<import('./types').MigrationInventory> {return this.call('migration-inventory',[target]);}
+  cancelInventory():Promise<void> {return this.call('cancel-inventory',[]);}
   beginImport(file:File,directoryId:string):Promise<ImportPlan> {return this.call('begin-import',[file,directoryId]);}
   beginReadableImport(name:string,size:number,directoryId:string,symlink=false):Promise<ImportPlan> {return this.call('begin-readable-import',[name,size,directoryId,symlink]);}
   importBytes(id:string,bytes:Bytes):Promise<Bytes> {return this.call('import-chunk',[id,bytes],undefined,[bytes.buffer]);}
