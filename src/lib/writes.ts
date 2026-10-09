@@ -72,7 +72,7 @@ export async function executeWriteUnlocked(root:FileSystemDirectoryHandle,client
       const content=await parent(root,plan.createdFolder.path,true);
       if(await exists(content.folder,content.name))throw new Error('The new folder storage already exists. Try again.');
       const directory=await content.folder.getDirectoryHandle(content.name,{create:true});ownsFolder=true;
-      await write(await directory.getFileHandle('dirid.c9r',{create:true}),plan.createdFolder.backup);
+      await write(await directory.getFileHandle(plan.createdFolder.backupName??'dirid.c9r',{create:true}),plan.createdFolder.backup);
       signal.throwIfAborted();
       if(await exists(destination.folder,destination.name))throw new Error('The destination changed. No existing item was replaced.');
     }

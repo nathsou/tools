@@ -21,11 +21,11 @@ export async function persistVault(parent:FileSystemDirectoryHandle,name:string,
         const saved=new Uint8Array(await(await handle.getFile()).arrayBuffer());
         if(saved.length!==bytes.length||saved.some((byte,i)=>byte!==bytes[i]))throw new Error('The new vault metadata could not be verified.');
       };
-      await write(root,'masterkey.cryptomator',new TextEncoder().encode(bootstrap.masterkey));
+      if(bootstrap.family!=='uvf')await write(root,'masterkey.cryptomator',new TextEncoder().encode(bootstrap.masterkey));
       let directory=root;for(const part of safePath(bootstrap.rootPath)){signal.throwIfAborted();directory=await directory.getDirectoryHandle(part,{create:true});}
-      await write(directory,'dirid.c9r',bootstrap.backup);
+      await write(directory,bootstrap.family==='uvf'?'dir.uvf':'dirid.c9r',bootstrap.backup);
       // The configuration is the final marker of a complete format-8 vault.
-      await write(root,'vault.cryptomator',new TextEncoder().encode(bootstrap.configuration));
+      await write(root,bootstrap.family==='uvf'?'vault.uvf':'vault.cryptomator',new TextEncoder().encode(bootstrap.configuration));
       signal.throwIfAborted();committed=true;return root;
     } catch(e) {
       if(!committed&&ownsRoot) {

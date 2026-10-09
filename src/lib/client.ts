@@ -31,14 +31,15 @@ export class VaultClient {
     return this.call('prepare',[plain]);
   }
   unlock(password:string,progress?:(p:number)=>void):Promise<VaultInfo> { return this.call('unlock',[password],progress); }
-  generate(password:string,progress?:(p:number)=>void):Promise<VaultBootstrap> {return this.call('generate',[password],progress);}
+  generate(password:string,progress?:(p:number)=>void,family:import('./types').VaultFamily='cryptomator'):Promise<VaultBootstrap> {return this.call('generate',[password,family],progress);}
   list(id:string):Promise<Listing> { return this.call('list',[id]); }
   beginImport(file:File,directoryId:string):Promise<ImportPlan> {return this.call('begin-import',[file,directoryId]);}
-  beginReadableImport(name:string,size:number,directoryId:string):Promise<ImportPlan> {return this.call('begin-readable-import',[name,size,directoryId]);}
+  beginReadableImport(name:string,size:number,directoryId:string,symlink=false):Promise<ImportPlan> {return this.call('begin-readable-import',[name,size,directoryId,symlink]);}
   importBytes(id:string,bytes:Bytes):Promise<Bytes> {return this.call('import-chunk',[id,bytes],undefined,[bytes.buffer]);}
   cacheCrypt(bytes:Bytes,binding:string,open=false):Promise<Bytes> {return this.call('cache-crypt',[bytes,binding,open],undefined,[bytes.buffer]);}
   importChunk(id:string):Promise<Bytes> {return this.call('import-chunk',[id]);}
   endImport(id:string):Promise<void> {return this.call('end-import',[id]);}
+  finalizeImport(id:string):Promise<Bytes> {return this.call('finalize-import',[id]);}
   readText(entry:VaultEntry):Promise<TextSnapshot> {return this.call('read-text',[entry.id]);}
   beginReplacement(file:File,parentId:string,entry:VaultEntry,expected:EditFingerprint):Promise<ReplacementPlan> {return this.call('begin-replacement',[file,parentId,entry.id,{...expected}]);}
   planWrite(request:WriteRequest):Promise<WritePlan> {return this.call('plan-write',[{...request}]);}

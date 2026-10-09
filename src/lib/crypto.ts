@@ -12,7 +12,7 @@ export interface VaultConfiguration { format: 8; cipherCombo: CipherCombo; jti: 
 export interface ParsedConfiguration { token: string; keyPath: string; payload: VaultConfiguration; signatureHash:'SHA-256'|'SHA-384'|'SHA-512'; }
 export interface Material { raw: Bytes; siv: Bytes; enc: CryptoKey; mac: CryptoKey; combo: CipherCombo; }
 export interface FileHeader { nonce: Bytes; key: CryptoKey; }
-export interface VaultBootstrap { masterkey:string; configuration:string; rootPath:string; backup:Bytes; }
+export interface VaultBootstrap { masterkey:string; configuration:string; rootPath:string; backup:Bytes; family?:'cryptomator'|'uvf'; }
 /** Runs in the vault worker. Only wrapped keys and encrypted metadata leave it. */
 export async function generateVault(password:string,onProgress?:(p:number)=>void):Promise<VaultBootstrap> {
   if (!password) throw new Error('Choose a vault password.');

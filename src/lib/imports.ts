@@ -20,10 +20,10 @@ async function parent(root:FileSystemDirectoryHandle,path:string) {
 }
 /** Filesystem writes stay on the page so lock/cancel can abort and clean up after
  * the cryptographic worker has already been terminated. Only ciphertext is written. */
-export interface ReadableFile {name:string;size:number;read:(start:number,end:number)=>Promise<Uint8Array<ArrayBuffer>>;}
+export interface ReadableFile {name:string;size:number;symlink?:boolean;read:(start:number,end:number)=>Promise<Uint8Array<ArrayBuffer>>;}
 export async function addFile(root:FileSystemDirectoryHandle,client:VaultClient,file:File|ReadableFile,directoryId:string,signal:AbortSignal,progress:(written:number)=>void):Promise<string> {
   signal.throwIfAborted();
-  const plan:ImportPlan=await (file instanceof File ? client.beginImport(file,directoryId) : client.beginReadableImport(file.name,file.size,directoryId));
+  const plan:ImportPlan=await (file instanceof File ? client.beginImport(file,directoryId) : client.beginReadableImport(file.name,file.size,directoryId,file.symlink));
   let folder:FileSystemDirectoryHandle|undefined, targetName='', temporary='', ownsTemporary=false, ownsTarget=false, committed=false;
   const expected=sha256.create();
   let writer:FileSystemWritableFileStream|undefined;
@@ -40,18 +40,19 @@ export async function addFile(root:FileSystemDirectoryHandle,client:VaultClient,
       signal.throwIfAborted();expected.update(encrypted);await writer.write(encrypted);
       written=Math.min(plan.size,written+4*1024*1024);progress(written);
     }
+    const tail=await client.finalizeImport(plan.id);signal.throwIfAborted();expected.update(tail);await writer.write(tail);
     signal.throwIfAborted();await writer.close();writer=undefined;
     // Stage a complete encrypted file before publishing its Cryptomator entry.
     // Recheck immediately before creating the target; never open an existing file.
     if(await exists(folder,targetName))throw new Error('The destination changed during import. Refresh and try again.');
     signal.throwIfAborted();
     let destination:FileSystemFileHandle;
-    if(plan.shortened) {
+    if(plan.shortened||plan.payloadName) {
       const node=await folder.getDirectoryHandle(targetName,{create:true});ownsTarget=true;
-      const mapping=await(await node.getFileHandle('name.c9s',{create:true})).createWritable();
+      if(plan.shortened){const mapping=await(await node.getFileHandle('name.c9s',{create:true})).createWritable();
       try {signal.throwIfAborted();await mapping.write(plan.encryptedName);signal.throwIfAborted();await mapping.close();}
-      catch(e){await mapping.abort().catch(()=>{});throw e;}
-      destination=await node.getFileHandle('contents.c9r',{create:true});
+      catch(e){await mapping.abort().catch(()=>{});throw e;}}
+      destination=await node.getFileHandle(plan.payloadName??'contents.c9r',{create:true});
     } else {destination=await folder.getFileHandle(targetName,{create:true});ownsTarget=true;}
     writer=await destination.createWritable({mode:'exclusive'} as FileSystemCreateWritableOptions);
     const encryptedFile=await stage.getFile();

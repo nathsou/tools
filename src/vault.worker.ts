@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { Vault } from './lib/vault';
 import {generateVault} from './lib/crypto';
+import {generateUvf} from './lib/uvf';
 import type { PasskeyRecord, Source } from './lib/types';
 let vault: Vault | undefined;
 self.onmessage = async (event: MessageEvent) => {
@@ -8,7 +9,7 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     let result: unknown;
     switch (action) {
-      case 'generate': result=await generateVault(args[0],progress=>self.postMessage({id,progress}));break;
+      case 'generate': result=await (args[1]==='uvf'?generateUvf:generateVault)(args[0],progress=>self.postMessage({id,progress}));break;
       case 'prepare': vault?.lock(); vault = new Vault(args[0] as Source); result = await vault.prepare(); break;
       case 'unlock': result = await vault!.unlock(args[0], progress => self.postMessage({ id, progress })); break;
       case 'list': result = await vault!.list(args[0]); break;
@@ -16,10 +17,11 @@ self.onmessage = async (event: MessageEvent) => {
       case 'read-text': result=await vault!.readText(args[0]);break;
       case 'begin-replacement': result=await vault!.beginReplacement(args[0],args[1],args[2],args[3]);break;
       case 'begin-import': result=await vault!.beginImport(args[0],args[1]); break;
-      case 'begin-readable-import': result=await vault!.beginReadableImport(args[0],args[1],args[2]);break;
+      case 'begin-readable-import': result=await vault!.beginReadableImport(args[0],args[1],args[2],undefined,args[3]);break;
       case 'cache-crypt': result=await vault!.cacheCrypt(args[0],args[1],args[2]);break;
       case 'import-chunk': result=await vault!.importChunk(args[0],args[1]); break;
       case 'end-import': vault!.endImport(args[0]); break;
+      case 'finalize-import': result=await vault!.finalizeImport(args[0]);break;
       case 'plan-write': result=await vault!.planWrite(args[0]);break;
       case 'finish-write': vault!.finishWrite(args[0],args[1]);break;
       case 'seal': {
