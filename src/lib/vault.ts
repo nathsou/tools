@@ -3,7 +3,7 @@ import {sha256} from '@noble/hashes/sha2.js';
 import {MIGRATION_MARKER} from './filesystem';
 import { concat, digest, fromBase64, random, toBase64, toBase64Url, utf8, type Bytes } from './bytes';
 import { chunkSize, layout, createDirectory, chunkOverhead, cleartextSize, createMaterial, decryptChunk, decryptHeader, decryptName, destroyMaterial, directoryPath, encryptChunk, encryptHeader, encryptName, headerSize, paddedBase64Url, parseConfiguration, parseMasterkey, unlockMasterkey, validateName, verifyConfiguration, verifyMasterkeyVersion, type FileHeader, type MasterkeyFile, type Material, type ParsedConfiguration } from './vault-format';
-import { createStorage, isFilesystemMetadata, readSmall, type VaultStorage } from './filesystem';
+import { createStorage, isFilesystemMetadata, readSmall, type VaultStorage, type VaultFile } from './filesystem';
 import { classify, type ImportPlan, type Listing, type PasskeyRecord, type Source, type VaultEntry, type VaultInfo, type WritePlan, type WriteRequest,type TextSnapshot,type ReplacementPlan,type EditFingerprint } from './types';
 
 export class Vault {
@@ -14,13 +14,13 @@ export class Vault {
   private inventorySequence=0;
   private master!: MasterkeyFile;
   private material?: Material;
-  private headers = new Map<string, { file:File; header:FileHeader }>();
+  private headers = new Map<string, { file:VaultFile; header:FileHeader }>();
   private files = new Map<string, VaultEntry>();
   private directories = new Set(['']);
   private imports = new Map<string,{ file?:File; size:number; header:FileHeader; material:Material; offset:number; pending:Bytes; index:number; finalized:boolean }>();
   private write?:{plan:WritePlan;request:WriteRequest};
   info!: VaultInfo;
-  constructor(source: Source) { this.storage = createStorage(source); }
+  constructor(source: Source | VaultStorage) { this.storage = 'type' in source ? createStorage(source) : source; }
   async prepare(allowIncomplete=false): Promise<VaultInfo> {
     if(!allowIncomplete){let pending=false;try{await this.storage.file(MIGRATION_MARKER);pending=true;}catch(e){if(!(e instanceof DOMException&&e.name==='NotFoundError'))throw e;}if(pending)throw new Error('This vault is an incomplete migration. Your original vault is unchanged. Remove the incomplete destination and start a new migration.');}
     let configText = '',hasConfig=false;

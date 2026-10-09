@@ -36,6 +36,8 @@ mise exec -- bunx playwright install chromium
 mise run e2e
 ```
 
+For browser-free Cryptomator → UVF conversion, run `bun run convert:uvf <source-vault> <new-uvf-directory>`. See the [on-disk conversion guide](crypte/README.md#convert-on-disk-with-bun) for passwords, preflight and verification.
+
 ## Static hosting
 
 Serve the contents of `dist/` over HTTPS. No backend is needed for Crypte or Drop’s manual pairing. Drop optionally supports automatic pairing using the [Cloudflare Worker setup](drop/README.md#cloudflare-automatic-pairing); file transfers still go directly between browsers. Relative asset URLs support hosting at a domain root or a project subdirectory, such as `/tools/` on GitHub Pages. Preserve each tool’s directory and serve its `index.html` when visiting `/crypte/` or `/drop/`; do not rewrite all requests to the root index. GitHub Pages must serve the **built output**, not the TypeScript source files.

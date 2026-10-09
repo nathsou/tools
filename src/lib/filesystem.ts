@@ -4,9 +4,17 @@ export interface StorageEntry { name: string; kind: 'file' | 'directory'; }
 /** macOS sidecars on the encrypted filesystem, not encrypted vault entries.
  * Check ciphertext storage names only: decrypted dotfiles are ordinary content. */
 export const isFilesystemMetadata = (entry:StorageEntry):boolean => entry.kind === 'file' && (entry.name.startsWith('._') || entry.name === '.DS_Store');
+/** The read-only subset needed by the format engine, also implementable on disk. */
+export interface VaultFile {
+  readonly size:number;
+  readonly lastModified:number;
+  arrayBuffer():Promise<ArrayBuffer>;
+  text():Promise<string>;
+  slice(start?:number,end?:number):{arrayBuffer():Promise<ArrayBuffer>};
+}
 export interface VaultStorage {
   name: string;
-  file(path: string): Promise<File>;
+  file(path: string): Promise<VaultFile>;
   list(path: string): Promise<StorageEntry[]>;
 }
 export function safePath(path: string): string[] {

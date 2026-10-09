@@ -49,6 +49,30 @@ Choose **Migrate vault** while a vault is unlocked with native folder access. A 
 
 Filenames, file bytes, empty directories, hierarchy and symlink targets are preserved. Browser filesystem APIs do not preserve original modification timestamps, permissions or extended attributes. Application caches, local passkey records and orphaned/unreachable encrypted objects are not migrated. The new vault can be remembered and enrolled with a passkey separately. Preflight and verification read the vault several times, so large vaults can take a while.
 
+### Convert on disk with Bun
+
+From a checkout of this repository, install its existing dependencies and run:
+
+```sh
+bun install --frozen-lockfile
+bun run convert:uvf /path/to/cryptomator-vault /path/to/new-uvf-vault
+```
+
+The CLI prompts for the source password without echoing it. The new UVF vault uses the same password unless you add `--new-password`, which prompts for a new password twice. No browser, server, mounted Cryptomator drive, or plaintext staging directory is needed. Point the script at the **encrypted vault directory** containing `masterkey.cryptomator`, not the unlocked drive. Both Cryptomator format 8 ciphers and legacy format 7 are supported.
+
+Use `--dry-run` to authenticate all source contents and check UVF compatibility without creating files. For unattended use, supply passwords through environment variables populated by your secret manager or shell's hidden-input prompt:
+
+```sh
+bun run convert:uvf --password-env SOURCE_PASSWORD --new-password-env UVF_PASSWORD /path/to/source /path/to/new-uvf
+```
+
+Do not put literal passwords in command arguments or shell history. Omit `--new-password-env` to reuse the source password. Run `bun run convert:uvf --help` for all options.
+
+The destination must not exist, its parent directory must exist, and it must be outside the source. Pause other vault writers and sync clients for the entire conversion and verification; allow space for a complete encrypted copy. Files are read in bounded batches and encrypted directly into the destination. The script reopens it, checks every logical path, entry kind and size, compares decrypted SHA-256 hashes, and checks that the source ciphertext inventory stayed unchanged before removing the incomplete marker. Empty files/folders, hidden files, Unicode names and encrypted symlink entries are preserved; symlinks are never followed. Filesystem timestamps and permissions are not copied. Native filesystem symlinks within the encrypted storage are rejected.
+
+UVF-incompatible names (including names exceeding 172 UTF-8 bytes), ambiguous names, damaged files and invalid symlink targets fail preflight without creating the destination. Nothing is silently renamed or skipped. Only reachable vault contents are converted; unrelated files and orphaned ciphertext are not copied. The source is never deleted or modified. Cancellation, interrupted writes or failed verification retain the encrypted partial destination with `.crypte-migration-incomplete`, which Crypte refuses to open normally. Remove the partial folder before retrying; there is no resume mode. Keep the source until you have independently confirmed the new vault meets your needs.
+
+
 ## Open a vault
 
 Choose the **encrypted vault root**, containing `vault.uvf`, or `vault.cryptomator` and `masterkey.cryptomator` (or only `masterkey.cryptomator` for format 7), and enter its password. Crypte detects the format automatically; roots containing both formats are rejected. The unlock screen shows the format and whether native write access is available. The native directory picker requests read/write access for vault management and encrypted thumbnail caching. A directory-file-input fallback supports browsers without that picker, but you must select the folder again after reloading. The fallback cannot discover an empty encrypted directory with no files or directory-ID backup.
