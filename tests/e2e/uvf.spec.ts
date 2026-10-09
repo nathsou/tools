@@ -13,8 +13,8 @@ async function unlock(page:Page,password=uvfPassword){await page.getByLabel('Vau
 async function snapshot(page:Page,name='Source'){
   return page.evaluate(async name=>{const result:Record<string,string>={};async function walk(root:FileSystemDirectoryHandle,path=''){for await(const [name,handle] of root.entries()){if(name.startsWith('.crype'))continue;const p=path?`${path}/${name}`:name;if(handle.kind==='directory')await walk(handle as FileSystemDirectoryHandle,p);else{const bytes=new Uint8Array(await(await(handle as FileSystemFileHandle).getFile()).arrayBuffer());let binary='';for(const b of bytes)binary+=String.fromCharCode(b);result[p]=btoa(binary);}}}await walk(await(await navigator.storage.getDirectory()).getDirectoryHandle(name));return result;},name);
 }
-async function review(page:Page,name:string){
-  await page.getByRole('button',{name:'Migrate vault',exact:true}).click();await page.getByLabel('New vault name',{exact:true}).fill(name);await page.getByRole('button',{name:'Choose migration location'}).click();await page.getByLabel('New vault password',{exact:true}).fill('destination password');await page.getByLabel('Confirm new password',{exact:true}).fill('destination password');await page.getByRole('button',{name:'Review migration'}).click();await expect(page.getByRole('button',{name:'Create verified copy'})).toBeVisible({timeout:30000});
+async function review(page:Page,name:string,skip=false){
+  await page.getByRole('button',{name:'Migrate vault',exact:true}).click();await page.getByLabel('New vault name',{exact:true}).fill(name);await page.getByRole('button',{name:'Choose migration location'}).click();await page.getByLabel('New vault password',{exact:true}).fill('destination password');await page.getByLabel('Confirm new password',{exact:true}).fill('destination password');if(skip)await page.getByLabel('Skip full source scan').check();await page.getByRole('button',{name:'Review migration'}).click();await expect(page.getByRole('button',{name:'Create verified copy'})).toBeVisible({timeout:30000});
 }
 async function migrate(page:Page,name:string){await review(page,name);if(name==='Cryptomator copy')await page.screenshot({path:'test-results/migration-review-desktop.png'});await page.getByRole('button',{name:'Create verified copy'}).click();await expect(page.getByRole('heading',{name:'Every file verified'})).toBeVisible({timeout:60000});await page.getByRole('button',{name:'Open new vault'}).click();await unlock(page,'destination password');}
 async function action(page:Page,name:string,label:string){await page.getByRole('button',{name:`Actions for ${name}`,exact:true}).click();await page.locator('.entry-menu-popup').getByRole('button',{name:label,exact:true}).click();}
@@ -41,6 +41,47 @@ for(const fixture of ['gcm','ctr','legacy'])test(`${fixture} migration reports l
   const paths:string[]=JSON.parse(await readFile(`tests/fixtures/${fixture}/index.json`,'utf8')),files=new Map(await Promise.all(paths.map(async p=>[p,await readFile(`tests/fixtures/${fixture}/${p}`)] as const)));
   await setup(page,files);await unlock(page,'crypte-demo');const original=await snapshot(page);await review(page,'Blocked copy');await expect(page.getByRole('alert')).toContainText('172 UTF-8 bytes');await expect(page.getByRole('button',{name:'Create verified copy'})).toBeDisabled();
   expect(await page.evaluate(async()=>{try{await(await navigator.storage.getDirectory()).getDirectoryHandle('Blocked copy');return true;}catch{return false;}})).toBe(false);expect(await snapshot(page)).toEqual(original);
+});
+
+for(const width of [1440,390]) test(`source checking shows a visible progress bar at ${width}px`,async({page})=>{
+  await page.setViewportSize({width,height:width===390?844:950});
+  await setup(page);await unlock(page);
+  await page.evaluate(()=>{
+    const post=Worker.prototype.postMessage;
+    Worker.prototype.postMessage=function(data:any,options:any){
+      if(data.action==='migration-inventory'){
+        const handler=this.onmessage!;
+        this.onmessage=function(event){
+          if(event.data.id===data.id&&'result' in event.data)setTimeout(()=>handler.call(this,event),1000);
+          else handler.call(this,event);
+        };
+      }
+      return post.call(this,data,options);
+    };
+  });
+  await page.getByRole('button',{name:'Migrate vault',exact:true}).click();
+  await page.getByRole('button',{name:'Choose migration location'}).click();
+  await page.getByLabel('New vault password',{exact:true}).fill('destination password');await page.getByLabel('Confirm new password',{exact:true}).fill('destination password');
+  await page.getByRole('button',{name:'Review migration'}).click();
+  const bar=page.getByRole('progressbar',{name:'Checking source files'});
+  await expect(bar).toBeInViewport();await expect(bar).toHaveAttribute('value','100');
+  await expect(page.locator('.migration-meter')).toContainText('processed');
+  await page.screenshot({path:`test-results/migration-checking-progress-${width}.png`});
+  await expect(page.getByRole('button',{name:'Create verified copy'})).toBeVisible();
+});
+
+test('skipping the full source scan still creates a verified browser copy',async({page})=>{
+  await setup(page);await unlock(page);const original=await snapshot(page);
+  await page.evaluate(()=>{
+    (window as any).__scanModes=[];const post=Worker.prototype.postMessage;
+    Worker.prototype.postMessage=function(data:any,options:any){if(data.action==='migration-inventory')(window as any).__scanModes.push(data.args[1].skipContentVerification);return post.call(this,data,options);};
+  });
+  await review(page,'Fast copy',true);await expect(page.getByText('The full source-content scan was skipped.',{exact:false})).toBeVisible();
+  await page.getByRole('button',{name:'Create verified copy'}).click();await expect(page.getByRole('heading',{name:'Every file verified'})).toBeVisible({timeout:60000});
+  expect(await page.evaluate(()=>(window as any).__scanModes)).toEqual([true,true,false,true,false]);
+  expect(await snapshot(page)).toEqual(original);expect((await snapshot(page,'Fast copy'))['.crypte-migration-incomplete']).toBeUndefined();
+  await page.getByRole('button',{name:'Open new vault'}).click();await unlock(page,'destination password');
+  await page.getByRole('button',{name:'Open Field notes.txt',exact:true}).click();await expect(page.locator('.reader')).toContainText('independent UVF');
 });
 
 test('cancelled migration keeps the source and marks the destination incomplete',async({page})=>{

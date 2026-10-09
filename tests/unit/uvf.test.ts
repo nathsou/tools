@@ -1,5 +1,6 @@
 import {describe,test,expect} from 'bun:test';
 import {Vault} from '../../src/lib/vault';
+import {createStorage} from '../../src/lib/filesystem';
 import {concat,text} from '../../src/lib/bytes';
 import {generateUvf,parseUvf,uvfCleartextSize,unlockUvf,destroyUvf,UVF_MAX_CLEAR} from '../../src/lib/uvf';
 import {uvfFixture,uvfPassword,decryptUvfReference} from '../../scripts/reference-uvf';
@@ -54,6 +55,20 @@ describe('UVF independent interoperability',()=>{
     expect(first.issues).toEqual([]);expect(first.fingerprint).toBe(second.fingerprint);expect(first.files).toBe(6);expect(first.folders).toBe(1);expect(first.items.some(i=>i.path==='New folder/café.txt')).toBe(true);
     const changed=new Map(files),path=[...changed.keys()].find(p=>p.endsWith('symlink.uvf'))!,bytes=Buffer.from(changed.get(path)!);bytes[bytes.length-1]^=1;changed.set(path,bytes);
     const broken=new Vault(source(changed));await broken.prepare();await broken.unlock(uvfPassword);const report=await broken.migrationInventory('cryptomator');expect(report.issues.some(i=>i.includes('authentication'))).toBe(true);expect(report.fingerprint).not.toBe(first.fingerprint);vault.lock();broken.lock();
+  });
+  test('metadata-only inventories skip damaged file contents but preserve compatibility checks',async()=>{
+    const data=uvfFixture(),path=[...data.files.keys()].find(p=>data.files.get(p)!.length>65000)!,bytes=Buffer.from(data.files.get(path)!);bytes[bytes.length-1]^=1;data.files.set(path,bytes);
+    const storage=createStorage(source(data.files));let payloadReads=0;
+    const vault=new Vault({name:storage.name,list:p=>storage.list(p),async file(p){
+      const file=await storage.file(p);if(p!==path)return file;
+      return {size:file.size,lastModified:file.lastModified,arrayBuffer(){payloadReads++;return file.arrayBuffer();},text(){payloadReads++;return file.text();},slice(a,b){payloadReads++;return file.slice(a,b);}};
+    }});await vault.prepare();await vault.unlock(uvfPassword);
+    const updates:import('../../src/lib/types').InventoryProgress[]=[];
+    const metadata=await vault.migrationInventory('cryptomator',{skipContentVerification:true},p=>{updates.push(p);});
+    expect(payloadReads).toBe(0);expect(metadata.issues).toEqual([]);expect(metadata.skipContentVerification).toBe(true);
+    expect(updates[0].phase).toBe('discovering');expect(updates.at(-1)?.done).toBe(true);
+    expect(updates.at(-1)?.bytesProcessed).toBe(updates.at(-1)?.bytesTotal);
+    const full=await vault.migrationInventory('cryptomator');expect(payloadReads).toBeGreaterThan(0);expect(full.issues.length).toBeGreaterThan(0);expect(full.fingerprint).not.toBe(metadata.fingerprint);vault.lock();
   });
   test('an incomplete migration is blocked and preflight can be cancelled',async()=>{
     const {vault,files}=await fixture();files.set('.crypte-migration-incomplete',Buffer.from('pending'));const pending=new Vault(source(files));await expect(pending.prepare()).rejects.toThrow('incomplete migration');

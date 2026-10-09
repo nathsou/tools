@@ -95,6 +95,22 @@ describe('on-disk Cryptomator to UVF conversion', () => {
       } finally { destination.lock(); }
     }, 30000);
   }
+  test('skipping the source scan still verifies a complete copy and reports byte progress', async () => {
+    const f = await fixture(), progress: import('../../scripts/lib/convert-vault').ConversionProgress[] = [];
+    await convert({...f, password, skipSourceScan: true, progress(value) { progress.push(value); }});
+    expect(await contents(f.destination)).toEqual(await contents(f.source));
+    const scans = progress.filter(p => p.scan);
+    expect(scans.some(p => p.stage === 'checking' && p.scan!.phase === 'discovering')).toBe(true);
+    expect(scans.some(p => p.detail === 'Destination scan' && p.scan!.done && p.scan!.bytesProcessed === p.scan!.bytesTotal)).toBe(true);
+    expect(scans.filter(p => p.scan!.done).every(p => p.scan!.completed === p.scan!.total)).toBe(true);
+  }, 15000);
+  for (const empty of [false, true]) test(`skipped source scan catches corrupt ${empty ? 'empty headers' : 'contents'} during copying`, async () => {
+    const f = await fixture(), vault = await opened(f.source), inventory = await vault.migrationInventory('uvf', {skipContentVerification: true}); vault.lock();
+    const entry = inventory.items.find(i => i.entry.kind !== 'folder' && i.entry.kind !== 'symlink' && (empty ? i.entry.size === 0 : i.entry.size > 0))!.entry;
+    const path = join(f.source, entry.path), bytes = await readFile(path); bytes[bytes.length - 1] ^= 1; await writeFile(path, bytes);
+    await expect(convert({...f, password, skipSourceScan: true})).rejects.toThrow();
+    expect(await readFile(join(f.destination, MIGRATION_MARKER), 'utf8')).toContain('Incomplete');
+  }, 15000);
   test('dry run authenticates the source and creates nothing', async () => {
     const f = await fixture(); expect((await convert({...f, password, dryRun: true})).dryRun).toBe(true);
     expect(await readdir(f.root)).toEqual(['source']);
@@ -102,6 +118,7 @@ describe('on-disk Cryptomator to UVF conversion', () => {
   test('wrong passwords and unsupported names fail before output creation', async () => {
     const f = await fixture(); await expect(convert({...f, password: 'wrong'})).rejects.toThrow();
     const long = await fixture('SIV_GCM', false, true); await expect(convert({...long, password})).rejects.toThrow('Source preflight');
+    await expect(convert({...long, password, skipSourceScan:true})).rejects.toThrow('Source preflight');
     expect(await readdir(f.root)).toEqual(['source']); expect(await readdir(long.root)).toEqual(['source']);
   });
   test('corrupt source data fails before creating output', async () => {
@@ -126,9 +143,9 @@ describe('on-disk Cryptomator to UVF conversion', () => {
     const pending = new Vault(await DiskStorage.at(f.destination)); await expect(pending.prepare()).rejects.toThrow('incomplete migration');
     expect(await fingerprint(f.source)).toBe(before);
   }, 15000);
-  test('source changes during copying cannot produce a finished vault', async () => {
+  for(const skipSourceScan of [false,true]) test(`source changes cannot produce a finished vault (skip scan: ${skipSourceScan})`, async () => {
     const f = await fixture(); let changed = false;
-    await expect(convert({...f, password, async progress(value) {
+    await expect(convert({...f, password, skipSourceScan, async progress(value) {
       if (value.stage === 'verifying' && !changed) {
         changed = true; const path = [...f.files.keys()].find(p => p.endsWith('contents.c9r'))!, bytes = Buffer.from(f.files.get(path)!); bytes[bytes.length - 1] ^= 1;
         await writeFile(join(f.source, path), bytes);
@@ -136,9 +153,9 @@ describe('on-disk Cryptomator to UVF conversion', () => {
     }})).rejects.toThrow();
     expect(await readFile(join(f.destination, MIGRATION_MARKER), 'utf8')).toContain('Incomplete');
   }, 15000);
-  test('destination corruption fails verification and retains its marker', async () => {
+  for(const skipSourceScan of [false,true]) test(`destination corruption retains its marker (skip scan: ${skipSourceScan})`, async () => {
     const f = await fixture(); let changed = false;
-    await expect(convert({...f, password, async progress(value) {
+    await expect(convert({...f, password, skipSourceScan, async progress(value) {
       if (value.stage === 'verifying' && !changed) {
         changed = true; const vault = await opened(f.destination, password, true), entry = (await vault.list('')).entries.find(e => e.kind === 'file' && e.size > 0)!; vault.lock();
         const path = join(f.destination, entry.path), bytes = await readFile(path); bytes[bytes.length - 1] ^= 1; await writeFile(path, bytes);
@@ -152,8 +169,11 @@ describe('on-disk Cryptomator to UVF conversion', () => {
     const help = run(['--help']); expect(help.status).toBe(0); expect(help.stdout).toContain('Usage:');
     const missing = run(['--password-env', 'CRYPTE_UNSET_TEST_PASSWORD', f.source, f.destination]); expect(missing.status).toBe(1); expect(missing.stderr).toContain('not set');
     const noTerminal = run([f.source, f.destination]); expect(noTerminal.status).toBe(1); expect(noTerminal.stderr).toContain('terminal');
-    const result = run(['--password-env', 'CRYPTE_TEST_PASSWORD', '--new-password-env', 'CRYPTE_TEST_NEW_PASSWORD', f.source, f.destination], {CRYPTE_TEST_PASSWORD: password, CRYPTE_TEST_NEW_PASSWORD: 'another secret'});
+    const dryRun = run(['--skip-source-scan', '--dry-run', '--password-env', 'CRYPTE_TEST_PASSWORD', f.source, f.destination], {CRYPTE_TEST_PASSWORD: password});
+    expect(dryRun.status).toBe(0);expect(dryRun.stdout).toContain('file contents were not scanned');expect(await readdir(f.root)).toEqual(['source']);
+    const result = run(['--skip-source-scan', '--password-env', 'CRYPTE_TEST_PASSWORD', '--new-password-env', 'CRYPTE_TEST_NEW_PASSWORD', f.source, f.destination], {CRYPTE_TEST_PASSWORD: password, CRYPTE_TEST_NEW_PASSWORD: 'another secret'});
     expect(result.status).toBe(0); expect(result.stdout).toContain('Verified UVF vault');
+    expect(result.stderr).toContain('Skipping the full source scan'); expect(result.stderr).toContain('100%'); expect(result.stderr).not.toContain('\x1b');
     expect(result.stdout + result.stderr).not.toContain(password); expect(result.stdout + result.stderr).not.toContain('another secret');
     expect(await contents(f.destination, 'another secret')).toEqual(await contents(f.source));
   }, 15000);

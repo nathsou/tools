@@ -45,6 +45,8 @@ Choose **Migrate vault** while a vault is unlocked with native folder access. A 
 
 **UVF names:** the current format has no long-name shortening mechanism. Crypte enforces a portable 255-byte ciphertext component limit, allowing at most **172 UTF-8 bytes** per plaintext filename. Long Cryptomator names, non-NFC names, non-normalized UVF symlink targets and case-insensitive collisions are reported before copying. Nothing is silently renamed or skipped. Fix names in the source first and update any affected symbolic links yourself.
 
+**Progress and optional source scan:** checking first discovers the directory tree, showing a running entry count, then shows a byte-based progress bar once the amount of scan work is known. Copying and each verification pass also show progress. To reduce source reads, select **Skip full source scan** before reviewing. Names, structure, format limits and symlink targets are still checked. File contents (including empty-file headers) are authenticated as they are copied, and destination verification is always performed. With this option, source payload changes are detected using size and modification timestamps instead of ciphertext hashes; changes that preserve both can go undetected. Corruption may be discovered only after creating a partial copy. Keep external writers paused. Full scanning remains the default.
+
 **Cancellation and failures:** cancel from the dialog or lock the vault. A destination already created is retained with `.crypte-migration-incomplete`; Crypte refuses to open it as a finished vault. Remove that incomplete folder before retrying with the same name. There is no automatic resume or automatic source deletion. Browser shutdowns retain the same marker. A failed copy does not authorize deleting the source.
 
 Filenames, file bytes, empty directories, hierarchy and symlink targets are preserved. Browser filesystem APIs do not preserve original modification timestamps, permissions or extended attributes. Application caches, local passkey records and orphaned/unreachable encrypted objects are not migrated. The new vault can be remembered and enrolled with a passkey separately. Preflight and verification read the vault several times, so large vaults can take a while.
@@ -60,7 +62,15 @@ bun run convert:uvf /path/to/cryptomator-vault /path/to/new-uvf-vault
 
 The CLI prompts for the source password without echoing it. The new UVF vault uses the same password unless you add `--new-password`, which prompts for a new password twice. No browser, server, mounted Cryptomator drive, or plaintext staging directory is needed. Point the script at the **encrypted vault directory** containing `masterkey.cryptomator`, not the unlocked drive. Both Cryptomator format 8 ciphers and legacy format 7 are supported.
 
-Use `--dry-run` to authenticate all source contents and check UVF compatibility without creating files. For unattended use, supply passwords through environment variables populated by your secret manager or shell's hidden-input prompt:
+Use `--dry-run` to authenticate all source contents and check UVF compatibility without creating files. Add `--skip-source-scan` to check source metadata without scanning all file contents:
+
+```sh
+bun run convert:uvf --skip-source-scan /path/to/source /path/to/new-uvf
+```
+
+The same tradeoffs as the browser option above apply: source content is authenticated during copying, source payload change checks use size/timestamps, and destination verification stays mandatory. With `--dry-run --skip-source-scan`, only metadata/compatibility is checked; file contents are not certified. The CLI uses an updating progress bar in a terminal and periodic plain-text progress lines when redirected. Percentages describe the current pass, not the entire migration.
+
+For unattended use, supply passwords through environment variables populated by your secret manager or shell's hidden-input prompt:
 
 ```sh
 bun run convert:uvf --password-env SOURCE_PASSWORD --new-password-env UVF_PASSWORD /path/to/source /path/to/new-uvf
@@ -68,9 +78,9 @@ bun run convert:uvf --password-env SOURCE_PASSWORD --new-password-env UVF_PASSWO
 
 Do not put literal passwords in command arguments or shell history. Omit `--new-password-env` to reuse the source password. Run `bun run convert:uvf --help` for all options.
 
-The destination must not exist, its parent directory must exist, and it must be outside the source. Pause other vault writers and sync clients for the entire conversion and verification; allow space for a complete encrypted copy. Files are read in bounded batches and encrypted directly into the destination. The script reopens it, checks every logical path, entry kind and size, compares decrypted SHA-256 hashes, and checks that the source ciphertext inventory stayed unchanged before removing the incomplete marker. Empty files/folders, hidden files, Unicode names and encrypted symlink entries are preserved; symlinks are never followed. Filesystem timestamps and permissions are not copied. Native filesystem symlinks within the encrypted storage are rejected.
+The destination must not exist, its parent directory must exist, and it must be outside the source. Pause other vault writers and sync clients for the entire conversion and verification; allow space for a complete encrypted copy. Files are read in bounded batches and encrypted directly into the destination. The script reopens it, checks every logical path, entry kind and size, compares decrypted SHA-256 hashes, and checks that the source inventory stayed unchanged (ciphertext hashes by default, payload size/timestamps when skipping the source scan) before removing the incomplete marker. Empty files/folders, hidden files, Unicode names and encrypted symlink entries are preserved; symlinks are never followed. Filesystem timestamps and permissions are not copied. Native filesystem symlinks within the encrypted storage are rejected.
 
-UVF-incompatible names (including names exceeding 172 UTF-8 bytes), ambiguous names, damaged files and invalid symlink targets fail preflight without creating the destination. Nothing is silently renamed or skipped. Only reachable vault contents are converted; unrelated files and orphaned ciphertext are not copied. The source is never deleted or modified. Cancellation, interrupted writes or failed verification retain the encrypted partial destination with `.crypte-migration-incomplete`, which Crypte refuses to open normally. Remove the partial folder before retrying; there is no resume mode. Keep the source until you have independently confirmed the new vault meets your needs.
+UVF-incompatible names (including names exceeding 172 UTF-8 bytes), ambiguous names and invalid symlink targets fail preflight without creating the destination. With the default full scan, damaged file contents also fail preflight; when the scan is skipped, they fail during copying. Nothing is silently renamed or skipped. Only reachable vault contents are converted; unrelated files and orphaned ciphertext are not copied. The source is never deleted or modified. Cancellation, interrupted writes or failed verification retain the encrypted partial destination with `.crypte-migration-incomplete`, which Crypte refuses to open normally. Remove the partial folder before retrying; there is no resume mode. Keep the source until you have independently confirmed the new vault meets your needs.
 
 
 ## Open a vault

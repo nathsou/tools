@@ -2,6 +2,7 @@
 import {createInterface} from 'node:readline';
 import {Writable} from 'node:stream';
 import {pathToFileURL} from 'node:url';
+import {progressReporter} from './lib/progress';
 import {convertCryptomatorToUvf} from './lib/convert-vault';
 
 const help = `Convert a Cryptomator format 7/8 vault to a new UVF v1 vault on disk.
@@ -12,6 +13,7 @@ Usage: bun run convert:uvf [options] <source-vault> <new-uvf-directory>
   --new-password           Prompt for a different destination password (twice)
   --new-password-env NAME  Read the destination password from this environment variable
   --dry-run                Authenticate and check compatibility without creating files
+  --skip-source-scan       Check metadata only; authenticate contents during copying
   --help                   Show this help
 
 By default, both vaults use the source password. Interactive passwords are hidden.
@@ -27,7 +29,7 @@ function parse(args: string[]) {
     const arg = args[i];
     if (!positional && arg === '--') { positional = true; continue; }
     if (!positional && arg.startsWith('-')) {
-      if (!['--password-env', '--new-password-env', '--new-password', '--dry-run', '--help'].includes(arg)) throw new Error(`Unknown option: ${arg}`);
+      if (!['--password-env', '--new-password-env', '--new-password', '--dry-run', '--skip-source-scan', '--help'].includes(arg)) throw new Error(`Unknown option: ${arg}`);
       if (values.has(arg)) throw new Error(`Repeated option: ${arg}`);
       const value = arg.endsWith('-env') ? args[++i] : '';
       if (value === undefined || (arg.endsWith('-env') && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value))) throw new Error(`${arg} requires an environment variable name.`);
@@ -70,6 +72,7 @@ async function passwordPrompt(label: string, controller: AbortController): Promi
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const controller = new AbortController();
   let exitCode = 1;
+  const progress = progressReporter(process.stderr);
   const interrupt = () => { exitCode = 130; controller.abort(); };
   const terminate = () => { exitCode = 143; controller.abort(); };
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
@@ -89,17 +92,13 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       if (destinationPassword !== await passwordPrompt('Repeat UVF password: ', controller)) throw new Error('The new passwords do not match.');
     }
     if (destinationPassword === '') throw new Error('The destination password cannot be empty.');
-    let lastStage = '', lastUpdate = 0;
-    const result = await convertCryptomatorToUvf({source: paths[0], destination: paths[1], password, destinationPassword, dryRun: values.has('--dry-run'), signal: controller.signal,
-      progress(value) {
-        const now = Date.now();
-        if (value.stage === lastStage && now - lastUpdate < 1000) return;
-        lastStage = value.stage; lastUpdate = now;
-        process.stderr.write(`${value.stage}${value.total === undefined ? '' : `: ${value.completed ?? 0}/${value.total} entries`}${value.bytes === undefined ? '' : `, ${value.bytes} bytes copied`}\n`);
-      }
-    });
-    process.stdout.write(`${result.dryRun ? 'Preflight passed; no files created.' : `Verified UVF vault: ${JSON.stringify(result.destination)}`}\n${result.files} files/symlinks, ${result.folders} folders, ${result.bytes} bytes. Source retained unchanged.\n`);
+    const skipSourceScan = values.has('--skip-source-scan');
+    if (skipSourceScan) process.stderr.write('Skipping the full source scan: contents are authenticated during copying. Source change detection uses size/timestamps; destination verification remains mandatory.\n');
+    const result = await convertCryptomatorToUvf({source: paths[0], destination: paths[1], password, destinationPassword, dryRun: values.has('--dry-run'), skipSourceScan, signal: controller.signal, progress: value => progress.update(value)});
+    progress.finish();
+    process.stdout.write(`${result.dryRun ? skipSourceScan ? 'Metadata check passed; file contents were not scanned. No files created.' : 'Preflight passed; no files created.' : `Verified UVF vault: ${JSON.stringify(result.destination)}`}\n${result.files} files/symlinks, ${result.folders} folders, ${result.bytes} bytes. Source retained unchanged.\n`);
   } catch (error) {
+    progress.finish();
     // Escape terminal control characters that might occur in filesystem names.
     const message = (error instanceof Error ? error.message : String(error)).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
     process.stderr.write(`Error: ${message}\n`); process.exitCode = controller.signal.aborted && exitCode === 1 ? 130 : exitCode;

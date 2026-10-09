@@ -58,17 +58,25 @@ export class Vault {
   private async checkMetadata():Promise<void>{
     if(this.uvf&&await readSmall(this.storage,'vault.uvf',1024*1024)!==this.metadataText)throw new Error('Vault metadata changed. Lock and reopen the vault before writing.');
   }
-  async migrationInventory(target:import('./types').VaultFamily):Promise<import('./types').MigrationInventory>{
+  async migrationInventory(target:import('./types').VaultFamily,options:import('./types').InventoryOptions={},progress?:(value:import('./types').InventoryProgress)=>void|Promise<void>):Promise<import('./types').MigrationInventory>{
     const ticket=++this.inventorySequence,check=()=>{this.unlocked();if(ticket!==this.inventorySequence)throw new Error('Vault check cancelled.');};
     const material=this.unlocked(),items:import('./types').MigrationItem[]=[],issues:string[]=[],hash=sha256.create();
     const queue=[{id:'',path:'',depth:0}],seen=new Set(['']);let bytes=0,files=0,folders=0;
-    const add=async(path:string)=>{
-      const file=await this.storage.file(path),h=sha256.create();
-      try{for(let offset=0;offset<file.size;offset+=4*1024*1024){check();h.update(new Uint8Array(await file.slice(offset,offset+4*1024*1024).arrayBuffer()));}
-        hash.update(utf8(JSON.stringify([path,file.size,toBase64Url(h.digest())])));
-      }finally{h.destroy();}
+    // Discover the total before scanning. Retain only file stamps, not cached file data.
+    const jobs:{path:string;size:number;lastModified:number;payload:boolean}[]=[];
+    const skipped=options.skipContentVerification===true;
+    let processed=0,totalBytes=0,completed=0,lastReport=0;
+    const report=async(phase:'discovering'|'checking',path='',force=false,done=false)=>{
+      check();const now=Date.now();
+      if(progress&&(force||now-lastReport>=100)){lastReport=now;await progress({phase,path,completed,total:items.length,bytesProcessed:processed,bytesTotal:totalBytes,done});check();}
+    };
+    const add=async(path:string,payload=false)=>{
+      const file=await this.storage.file(path);jobs.push({path,size:file.size,lastModified:file.lastModified,payload});
+      if(!skipped||!payload)totalBytes+=file.size;
+      await report('discovering');
     };
     try{
+      await report('discovering','',true);
       for(const path of this.uvf?['vault.uvf']:this.config?['vault.cryptomator',this.config.keyPath]:['masterkey.cryptomator'])await add(path);
       for(let index=0;index<queue.length;index++){
         check();
@@ -79,8 +87,8 @@ export class Vault {
         for(const node of (await this.storage.list(storagePath)).sort((a,b)=>a.name.localeCompare(b.name))){
           if(isFilesystemMetadata(node)||!(node.name===layout(material).backup||node.name.endsWith(layout(material).extension)||(material.combo!=='UVF'&&node.name.endsWith('.c9s'))))continue;
           const path=`${storagePath}/${node.name}`;
-          if(node.kind==='file')await add(path);
-          else for(const child of (await this.storage.list(path)).sort((a,b)=>a.name.localeCompare(b.name))){if(isFilesystemMetadata(child))continue;if(child.kind!=='file'){issues.push(`${path}: unexpected nested encrypted directory.`);continue;}await add(`${path}/${child.name}`);}
+          if(node.kind==='file')await add(path,node.name!==layout(material).backup);
+          else for(const child of (await this.storage.list(path)).sort((a,b)=>a.name.localeCompare(b.name))){if(isFilesystemMetadata(child))continue;if(child.kind!=='file'){issues.push(`${path}: unexpected nested encrypted directory.`);continue;}await add(`${path}/${child.name}`,child.name==='contents.c9r'||child.name===layout(material).symlink);}
         }
         for(const entry of listing.entries.sort((a,b)=>a.name.localeCompare(b.name))){
           check();
@@ -94,8 +102,6 @@ export class Vault {
           }else{
             files++;bytes+=entry.size;if(!Number.isSafeInteger(bytes))throw new Error('Vault size exceeds the supported range.');
             if(target==='uvf'&&entry.size>UVF_MAX_CLEAR)issues.push(`${path}: file exceeds the UVF size limit.`);
-            // Authenticate every source chunk during preflight, including empty files.
-            for(let start=0;start<entry.size||start===0;start+=4*1024*1024){check();try{const clear=await this.read(entry.id,start,Math.min(entry.size,start+4*1024*1024));clear.fill(0);}catch(e){issues.push(`${path}: ${e instanceof Error?e.message:'Unreadable file.'}`);break;}if(!entry.size)break;}
             if(target==='uvf'&&entry.kind==='symlink'){
               if(entry.size>1024*1024)issues.push(`${path}: symlink target is too large.`);
               else try{const clear=await this.read(entry.id,0,entry.size);try{const target=new TextDecoder('utf-8',{fatal:true}).decode(clear);if(target!==target.normalize('NFC'))issues.push(`${path}: symlink target is not NFC-normalized.`);}finally{clear.fill(0);}}catch{issues.push(`${path}: invalid symlink target.`);}
@@ -103,8 +109,38 @@ export class Vault {
           }
         }
       }
+      // Work includes both ciphertext fingerprinting and plaintext authentication.
+      if(!skipped)totalBytes+=bytes;
+      await report('checking','',true);
+      for(const {path,size,lastModified,payload} of jobs){
+        check();
+        if(skipped&&payload){hash.update(utf8(JSON.stringify([path,size,lastModified])));continue;}
+        const file=await this.storage.file(path);
+        if(file.size!==size||file.lastModified!==lastModified)throw new Error('A vault file changed during the check.');
+        const h=sha256.create();
+        try{
+          for(let offset=0;offset<file.size;offset+=4*1024*1024){
+            check();const data=new Uint8Array(await file.slice(offset,offset+4*1024*1024).arrayBuffer());h.update(data);processed+=data.length;
+            await report('checking');
+          }
+          hash.update(utf8(JSON.stringify([path,file.size,toBase64Url(h.digest())])));
+        }finally{h.destroy();}
+      }
+      for(const {path,entry} of items){
+        check();
+        if(!skipped&&entry.kind!=='folder'){
+          for(let start=0;start<entry.size||start===0;start+=4*1024*1024){
+            check();
+            try{const clear=await this.read(entry.id,start,Math.min(entry.size,start+4*1024*1024));processed+=clear.length;clear.fill(0);}
+            catch(e){check();issues.push(`${path}: ${e instanceof Error?e.message:'Unreadable file.'}`);processed+=entry.size-start;break;}
+            await report('checking',path);if(!entry.size)break;
+          }
+        }
+        completed++;await report('checking',path);
+      }
+      await report('checking','',true,true);
       check();if(this.material!==material)throw new Error('The vault was locked.');
-      return {items,fingerprint:toBase64Url(hash.digest()),issues,bytes,files,folders};
+      return {items,fingerprint:toBase64Url(hash.digest()),issues,bytes,files,folders,skipContentVerification:skipped};
     }finally{hash.destroy();}
   }
   cancelInventory():void {this.inventorySequence++;}

@@ -13,6 +13,9 @@ export interface ConversionProgress {
   completed?: number;
   total?: number;
   bytes?: number;
+  scan?: import('../../src/lib/types').InventoryProgress;
+  detail?: string;
+  fileProgress?: number;
 }
 export interface ConversionOptions {
   source: string;
@@ -20,6 +23,7 @@ export interface ConversionOptions {
   password: string;
   destinationPassword?: string;
   dryRun?: boolean;
+  skipSourceScan?: boolean;
   signal?: AbortSignal;
   progress?: (value: ConversionProgress) => void | Promise<void>;
 }
@@ -56,7 +60,8 @@ export async function convertCryptomatorToUvf(options: ConversionOptions): Promi
     const info = await source.prepare();
     if (info.family !== 'cryptomator') throw new Error('The source must be a Cryptomator format 7 or 8 vault.');
     await source.unlock(options.password);
-    const inventory = await source.migrationInventory('uvf');
+    const scanOptions = {skipContentVerification: options.skipSourceScan === true};
+    const inventory = await source.migrationInventory('uvf', scanOptions, scan => report({stage: 'checking', scan, detail: options.skipSourceScan ? 'Source metadata' : 'Source scan'}));
     valid(inventory, 'Source preflight');
     signal.throwIfAborted();
     const result = {destination: target, files: inventory.files, folders: inventory.folders, bytes: inventory.bytes, dryRun: !!options.dryRun};
@@ -101,6 +106,7 @@ export async function convertCryptomatorToUvf(options: ConversionOptions): Promi
           let payload = plan.nodePath;
           if (plan.payloadName) { await output.mkdir(payload); payload += `/${plan.payloadName}`; }
           async function* chunks() {
+            if (!entry.size) await source.read(entry.id, 0, 0);
             yield plan.header;
             for (let start = 0; start < entry.size; start += BATCH) {
               signal.throwIfAborted();
@@ -111,7 +117,7 @@ export async function convertCryptomatorToUvf(options: ConversionOptions): Promi
                 signal.throwIfAborted(); yield encrypted;
               } finally { bytes.fill(0); }
               copied += Math.min(BATCH, entry.size - start);
-              await report({stage: 'copying', completed, total: inventory.items.length, bytes: copied});
+              await report({stage: 'copying', completed, total: inventory.items.length, bytes: copied, fileProgress: Math.min(entry.size, start + BATCH) / entry.size});
             }
             signal.throwIfAborted();
             yield await writer.finalizeImport(plan.id); // UVF's authenticated EOF, including empty files.
@@ -126,7 +132,7 @@ export async function convertCryptomatorToUvf(options: ConversionOptions): Promi
     destination.lock();
     destination = new Vault(await DiskStorage.at(target));
     await destination.prepare(true); await destination.unlock(password);
-    const actual = await destination.migrationInventory('uvf');
+    const actual = await destination.migrationInventory('uvf', {}, scan => report({stage: 'verifying', scan, detail: 'Destination scan'}));
     valid(actual, 'Destination verification');
     if (actual.items.length !== inventory.items.length) throw new Error('Destination entry count does not match the source.');
     const expected = new Map(inventory.items.map(item => [item.path, item.entry]));
@@ -142,16 +148,17 @@ export async function convertCryptomatorToUvf(options: ConversionOptions): Promi
           signal.throwIfAborted();
           const bytes = await destination.read(entry.id, start, Math.min(entry.size, start + BATCH));
           try { hash.update(bytes); } finally { bytes.fill(0); }
+          await report({stage: 'verifying', detail: 'Comparing contents', completed, total: inventory.items.length, fileProgress: entry.size ? Math.min(entry.size, start + BATCH) / entry.size : 1});
           if (!entry.size) break;
         }
         if (hash.digest('hex') !== hashes.get(item.path)) throw new Error(`Content verification failed for ${JSON.stringify(item.path)}.`);
       }
-      await report({stage: 'verifying', completed: ++completed, total: inventory.items.length});
+      await report({stage: 'verifying', detail: 'Comparing contents', completed: ++completed, total: inventory.items.length});
     }
-    const unchanged = await source.migrationInventory('uvf');
+    const unchanged = await source.migrationInventory('uvf', scanOptions, scan => report({stage: 'verifying', scan, detail: 'Source change check'}));
     valid(unchanged, 'Final source check');
     if (unchanged.fingerprint !== inventory.fingerprint) throw new Error('The source changed during conversion. Retry from a stable source.');
-    const final = await destination.migrationInventory('uvf');
+    const final = await destination.migrationInventory('uvf', {}, scan => report({stage: 'verifying', scan, detail: 'Final destination scan'}));
     valid(final, 'Final destination check');
     if (final.fingerprint !== actual.fingerprint) throw new Error('The destination changed during verification.');
     signal.throwIfAborted();

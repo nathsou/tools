@@ -13,7 +13,7 @@ self.onmessage = async (event: MessageEvent) => {
       case 'prepare': vault?.lock(); vault = new Vault(args[0] as Source); result = await vault.prepare(args[1]===true); break;
       case 'unlock': result = await vault!.unlock(args[0], progress => self.postMessage({ id, progress })); break;
       case 'list': result = await vault!.list(args[0]); break;
-      case 'migration-inventory': result=await vault!.migrationInventory(args[0]);break;
+      case 'migration-inventory': result=await vault!.migrationInventory(args[0],args[1],inventoryProgress=>self.postMessage({id,inventoryProgress}));break;
       case 'cancel-inventory': vault?.cancelInventory();break;
       case 'read': result = await vault!.read(args[0],args[1],args[2]); break;
       case 'read-text': result=await vault!.readText(args[0]);break;

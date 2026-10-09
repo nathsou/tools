@@ -5,22 +5,23 @@ export class VaultClient {
   private worker: Worker;
   private sequence = 0;
   private closed = false;
-  private pending = new Map<number,{ resolve:(v:any)=>void; reject:(e:Error)=>void; progress?:(p:number)=>void }>();
+  private pending = new Map<number,{ resolve:(v:any)=>void; reject:(e:Error)=>void; progress?:(p:number)=>void; inventoryProgress?:(p:import('./types').InventoryProgress)=>void }>();
   constructor() {
     this.worker = new Worker(new URL('../vault.worker.ts',import.meta.url),{ type:'module' });
     this.worker.onmessage = ({ data }) => {
       const job = this.pending.get(data.id); if (!job) return;
+      if ('inventoryProgress' in data) { job.inventoryProgress?.(data.inventoryProgress); return; }
       if ('progress' in data) { job.progress?.(data.progress); return; }
       this.pending.delete(data.id);
       if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
     };
     this.worker.onerror = () => this.close('The vault worker stopped. Unlock the vault again.');
   }
-  private call<T>(action:string,args:unknown[],progress?:(p:number)=>void,transfer:Transferable[]=[]):Promise<T> {
+  private call<T>(action:string,args:unknown[],progress?:(p:number)=>void,transfer:Transferable[]=[],inventoryProgress?:(p:import('./types').InventoryProgress)=>void):Promise<T> {
     if (this.closed) return Promise.reject(new Error('The vault is locked.'));
     const id = ++this.sequence;
     return new Promise((resolve,reject) => {
-      this.pending.set(id,{ resolve,reject,progress });
+      this.pending.set(id,{ resolve,reject,progress,inventoryProgress });
       try { this.worker.postMessage({ id, action, args },transfer); }
       catch (e) { this.pending.delete(id); reject(e); }
     });
@@ -33,7 +34,7 @@ export class VaultClient {
   unlock(password:string,progress?:(p:number)=>void):Promise<VaultInfo> { return this.call('unlock',[password],progress); }
   generate(password:string,progress?:(p:number)=>void,family:import('./types').VaultFamily='cryptomator'):Promise<VaultBootstrap> {return this.call('generate',[password,family],progress);}
   list(id:string):Promise<Listing> { return this.call('list',[id]); }
-  migrationInventory(target:import('./types').VaultFamily):Promise<import('./types').MigrationInventory> {return this.call('migration-inventory',[target]);}
+  migrationInventory(target:import('./types').VaultFamily,options:import('./types').InventoryOptions={},progress?:(p:import('./types').InventoryProgress)=>void):Promise<import('./types').MigrationInventory> {return this.call('migration-inventory',[target,{skipContentVerification:options.skipContentVerification===true}],undefined,[],progress);}
   cancelInventory():Promise<void> {return this.call('cancel-inventory',[]);}
   beginImport(file:File,directoryId:string):Promise<ImportPlan> {return this.call('begin-import',[file,directoryId]);}
   beginReadableImport(name:string,size:number,directoryId:string,symlink=false):Promise<ImportPlan> {return this.call('begin-readable-import',[name,size,directoryId,symlink]);}
