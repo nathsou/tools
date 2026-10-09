@@ -35,6 +35,7 @@ export async function saveText(root:FileSystemDirectoryHandle,client:VaultClient
       const packets:Uint8Array<ArrayBuffer>[]=[job.header];
       try {
         for(let offset=0;offset<job.size;offset+=4*1024*1024){signal.throwIfAborted();const bytes=await client.importChunk(job.id);packets.push(bytes);await writer.write(bytes.slice());}
+        const tail=await client.finalizeImport(job.id);signal.throwIfAborted();packets.push(tail);await writer.write(tail.slice());
         signal.throwIfAborted();await writer.close();writer=undefined;
         const intended=await checksum(new File(packets,'ciphertext'));
         const staged=await stage.getFile();if(await checksum(staged)!==intended)throw new Error('The encrypted edit could not be verified. The original has been kept.');

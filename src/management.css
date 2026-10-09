@@ -64,6 +64,9 @@
 
 .create-vault-form>input { width:100%;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);font-size:13px;margin-bottom:15px; }
 .create-vault-form>.secondary-button { width:100%; }
+.password-toggle { flex-shrink:0;font-size:11px;padding:2px 0; }
+.migrate-button { white-space:nowrap; }
+@media(max-width:580px) { .migrate-button { padding:8px; } .migrate-button span { display:none; } }
 .create-vault-form .setting-note { font-size:11px;line-height:1.7;margin-bottom:18px;color:var(--muted);overflow-wrap:anywhere; }
 .create-vault-button { width:100%;margin-top:12px; }
 .setting-row input[type=number] { width:95px;max-width:35%;padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--input);color:var(--text); }

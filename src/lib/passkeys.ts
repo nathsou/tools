@@ -48,10 +48,10 @@ export async function registerPasskey(info:VaultInfo,signal?:AbortSignal):Promis
   let prf = extensionResult(credential);
   if (!prf) prf = await evaluate(new Uint8Array(credential.rawId),salt,signal);
   if (prf.length !== 32) throw new Error('This passkey did not provide a usable encryption key.');
-  return { prf, record:{ version:1, vaultId:info.id, credentialId, salt:toBase64(salt), origin:location.origin, created:Date.now() } };
+  return { prf, record:{ version:info.family==='uvf'?2:1, vaultId:info.id, credentialId, salt:toBase64(salt), origin:location.origin, created:Date.now() } };
 }
 export async function authenticatePasskey(record:PasskeyRecord,signal?:AbortSignal):Promise<Bytes> {
-  if (record.version !== 1 || record.origin !== location.origin) throw new Error('This passkey was set up at another app address. Use your vault password.');
+  if (![1,2].includes(record.version) || record.origin !== location.origin) throw new Error('This passkey was set up at another app address. Use your vault password.');
   return evaluate(fromBase64(record.credentialId),fromBase64(record.salt),signal);
 }
 export function friendlyPasskeyError(error:unknown):string {

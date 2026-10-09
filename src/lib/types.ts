@@ -1,12 +1,15 @@
 export type CipherCombo = 'SIV_CTRMAC' | 'SIV_GCM';
+export type VaultFamily = 'cryptomator' | 'uvf';
 export type FileKind = 'folder' | 'image' | 'video' | 'audio' | 'text' | 'file' | 'symlink';
-export interface VaultInfo { id: string; name: string; format: number; cipherCombo: CipherCombo; }
+export interface VaultInfo { id: string; name: string; format: number; cipherCombo: CipherCombo | 'AES-256-GCM-32k'; family?:VaultFamily; }
 export interface VaultEntry {
   id: string; name: string; kind: FileKind; path: string; directoryId?: string;
   size: number; modified: number; mime: string; error?: string;
 }
 export interface Listing { entries: VaultEntry[]; warnings: string[]; }
-export interface ImportPlan { id:string; name:string; nodePath:string; encryptedName:string; shortened:boolean; size:number; header:Uint8Array<ArrayBuffer>; }
+export interface MigrationItem {path:string;parentId:string;entry:VaultEntry;}
+export interface MigrationInventory {items:MigrationItem[];fingerprint:string;issues:string[];bytes:number;files:number;folders:number;}
+export interface ImportPlan { id:string; name:string; nodePath:string; encryptedName:string; shortened:boolean; size:number; header:Uint8Array<ArrayBuffer>; payloadName?:string; }
 export type WriteRequest={kind:'mkdir';parentId:string;name:string}|{kind:'move';parentId:string;entryId:string;targetId:string;name:string}|{kind:'delete';parentId:string;entryId:string};
 export interface FileStamp {path:string;size:number;modified:number;}
 export interface EditFingerprint extends FileStamp {digest:string;}
@@ -15,13 +18,13 @@ export interface ReplacementPlan {import:ImportPlan;source:EditFingerprint;}
 export interface WritePlan {
   id:string;kind:WriteRequest['kind'];name:string;sourcePath?:string;entry?:VaultEntry;sourceFiles:FileStamp[];
   target?:{path:string;directory:boolean;payloadName:string;mapping?:string;};
-  createdFolder?:{id:string;path:string;marker:Uint8Array<ArrayBuffer>;backup:Uint8Array<ArrayBuffer>;};
+  createdFolder?:{id:string;path:string;marker:Uint8Array<ArrayBuffer>;backup:Uint8Array<ArrayBuffer>;backupName?:string;};
   removedFolders:{id:string;path:string}[];noop?:boolean;
 }
 export interface WriteOutcome {plan:WritePlan;warnings:string[];}
 export type Source = { type: 'handle'; handle: FileSystemDirectoryHandle } | { type: 'files'; files: { path: string; file: File }[]; name: string };
 export interface PasskeyRecord {
-  version: 1; vaultId: string; credentialId: string; salt: string; iv: string; ciphertext: string; origin: string; created: number;
+  version: 1 | 2; vaultId: string; credentialId: string; salt: string; iv: string; ciphertext: string; origin: string; created: number;
 }
 export function classify(name: string): { kind: FileKind; mime: string } {
   const ext = name.toLowerCase().split('.').pop() ?? '';

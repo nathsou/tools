@@ -10,3 +10,5 @@
 - The independent AES-SIV reference generator is project code built with Node crypto primitives. Its deterministic test vector comes from [RFC 5297, appendix A.1](https://www.rfc-editor.org/rfc/rfc5297#appendix-A.1).
 - The AES-CTR/HMAC golden header test value comes from Cryptomator's [cryptolib FileHeaderCryptorImplTest](https://github.com/cryptomator/cryptolib/blob/develop/src/test/java/org/cryptomator/cryptolib/v1/FileHeaderCryptorImplTest.java). Cryptolib is licensed under MIT. No Java implementation is included in the shipped application.
 - Cryptomator is the name of a separate product. This project implements a manager for its documented vault format and is not affiliated with it.
+
+- UVF support follows the MIT-licensed [Unified Vault Format specification](https://github.com/encryption-alliance/unified-vault-format/tree/ed54be8d9d4b85f325f7abffad158d3ddf6521c2). The implementation and independent Node/OpenSSL UVF test fixture are project-authored; no external UVF implementation is bundled.

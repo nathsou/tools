@@ -1,4 +1,5 @@
 import type { Source } from './types';
+export const MIGRATION_MARKER='.crypte-migration-incomplete';
 export interface StorageEntry { name: string; kind: 'file' | 'directory'; }
 /** macOS sidecars on the encrypted filesystem, not encrypted vault entries.
  * Check ciphertext storage names only: decrypted dotfiles are ordinary content. */

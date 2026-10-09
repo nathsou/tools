@@ -5,7 +5,7 @@ A collection of web-based tools by [nathsou](https://github.com/nathsou). The si
 | Tool | Route | Description |
 | --- | --- | --- |
 | [Drop](drop/README.md) | `/drop/` | Private, encrypted file transfers directly between two browsers, with manual or optional Cloudflare pairing. |
-| [Crypte](crypte/README.md) | `/crypte/` | A local Cryptomator vault manager with vault creation, file management, media previews/conversion jobs, text editing, and passkey unlock. |
+| [Crypte](crypte/README.md) | `/crypte/` | A local Cryptomator and UVF vault manager with verified migration between formats, creation, file management, media previews/conversion, text editing and passkey unlock. |
 
 ## Development
 
