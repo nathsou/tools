@@ -113,6 +113,14 @@ test('migration detects validly encrypted but altered destination content',async
   expect((await snapshot(page,'Altered copy'))['.crypte-migration-incomplete']).toBeDefined();
 });
 
+test('UVF folder download is available from the native vault menu',async({page})=>{
+  await page.addInitScript(()=>Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:undefined}));
+  await setup(page);await unlock(page);const original=await snapshot(page);
+  const pending=page.waitForEvent('download');await action(page,'New folder','Download folder (.zip)');const download=await pending;
+  expect(download.suggestedFilename()).toBe('New folder.zip');const bytes=await readFile((await download.path())!);
+  expect(bytes.readUInt32LE(bytes.length-22)).toBe(0x06054b50);expect(bytes.includes(Buffer.from('New folder/café.txt'))).toBe(true);expect(bytes.includes(Buffer.from('Nested across seed generations.'))).toBe(true);expect(await snapshot(page)).toEqual(original);
+});
+
 test('UVF creation and format choice work on mobile without overflow',async({page})=>{
   await page.setViewportSize({width:390,height:844});await page.addInitScript(()=>Object.defineProperty(window,'showDirectoryPicker',{configurable:true,value:()=>navigator.storage.getDirectory()}));await page.goto('/crypte/');await page.getByRole('button',{name:'Create new vault'}).click();await page.getByRole('radio',{name:/UVF/}).check();await page.getByLabel('Vault name',{exact:true}).fill('Mobile UVF');await page.getByRole('button',{name:'Choose vault location'}).click();await page.getByLabel('New vault password',{exact:true}).fill('new password');await page.getByLabel('Confirm vault password',{exact:true}).fill('new password');
   await page.screenshot({path:'test-results/uvf-create-mobile.png',fullPage:true});expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);

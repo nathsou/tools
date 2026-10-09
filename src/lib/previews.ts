@@ -29,27 +29,6 @@ export async function readBlob(client:VaultClient,entry:VaultEntry,limit=PREVIEW
     return new Blob(parts,{ type:entry.mime });
   } finally { for (const part of parts) part.fill(0); }
 }
-export async function exportFile(client:VaultClient,entry:VaultEntry):Promise<void> {
-  const picker = (window as Window & { showSaveFilePicker?:(options:{ suggestedName:string })=>Promise<FileSystemFileHandle> }).showSaveFilePicker;
-  if (picker) {
-    const handle = await picker({ suggestedName:entry.name });
-    const writable = await handle.createWritable();
-    try {
-      if (!entry.size) await client.read(entry,0,0);
-      for (let start=0; start<entry.size; start+=4*1024*1024) {
-        const bytes = await client.read(entry,start,Math.min(start+4*1024*1024,entry.size));
-        try { await writable.write(bytes); } finally { bytes.fill(0); }
-      }
-      await writable.close();
-    } catch (e) { await writable.abort(); throw e; }
-    return;
-  }
-  // Bound fallback memory and authenticate before exposing a download.
-  const blob = await readBlob(client,entry,128*1024*1024);
-  const url = URL.createObjectURL(blob), anchor = document.createElement('a');
-  anchor.href = url; anchor.download = entry.name; anchor.click();
-  setTimeout(()=>URL.revokeObjectURL(url),30000);
-}
 let thumbnailJobs = 0;
 const thumbnailWaiters:(()=>void)[] = [];
 async function acquire(signal:AbortSignal):Promise<void> {

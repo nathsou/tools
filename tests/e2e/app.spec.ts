@@ -289,7 +289,7 @@ test('native directory handles, streamed export, and remembered-vault reopening'
   const remembered=await page.evaluate(async()=>new Promise<any[]>(resolve=>{const db=indexedDB.open('crypte',1);db.onsuccess=()=>{const req=db.result.transaction('recent').objectStore('recent').getAll();req.onsuccess=()=>resolve(req.result);};}));
   expect(remembered).toHaveLength(1);
   if(/Chrome\/153\./.test(await page.evaluate(()=>navigator.userAgent)))expect(remembered[0].handle).toBeUndefined();
-  await page.getByRole('button',{name:'Export file',exact:true}).click();
+  await page.getByRole('button',{name:'Download file',exact:true}).click();
   await expect.poll(()=>page.evaluate(async()=>{try{return await(await(await navigator.storage.getDirectory()).getFileHandle('Field notes.txt')).getFile().then(f=>f.text());}catch{return '';}})).toContain('FIELD NOTES');
   await page.reload();await page.getByRole('button',{name:'Handle fixture',exact:true}).click();await passwordUnlock(page);
   await expect(page.getByRole('heading',{name:'All files',exact:true})).toBeVisible();
@@ -317,7 +317,7 @@ test('persistent handle storage and reopening in a regular browser profile',asyn
 test('fallback export produces the authenticated plaintext file',async({page})=>{
   await page.addInitScript(()=>Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
   await openVault(page);await page.getByRole('button',{name:'Open Field notes.txt',exact:true}).click();
-  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export file',exact:true}).click();
+  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Download file',exact:true}).click();
   const download=await pending;expect(download.suggestedFilename()).toBe('Field notes.txt');
   expect(await readFile((await download.path())!,'utf8')).toContain('FIELD NOTES');
 });
@@ -378,7 +378,7 @@ test('RTF opens as readable escaped text and export preserves the original docum
   await page.getByLabel('Find in file').fill('café');await expect(page.locator('.reader-line.match')).toContainText('café');
   await expect(page.getByText('RTF text extracted. Formatting and embedded objects are omitted.')).toBeVisible();
   await page.evaluate(()=>Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
-  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Export file',exact:true}).click();
+  const pending=page.waitForEvent('download');await page.getByRole('button',{name:'Download file',exact:true}).click();
   const download=await pending;expect(await readFile((await download.path())!)).toEqual(await readFile('tests/assets/notes.rtf'));
 });
 test('Mediabunny thumbnails work without service workers',async({page})=>{

@@ -3,6 +3,7 @@
   import {persistVault} from './lib/creation';
   import Icon from './components/Icon.svelte';
   import VaultFormatChoice from './components/VaultFormatChoice.svelte';
+  import {downloadEntry,type DownloadProgress} from './lib/downloads';
   import MigrationDialog from './components/MigrationDialog.svelte';
   import Thumbnail from './components/Thumbnail.svelte';
   import ConversionDialog from './components/ConversionDialog.svelte';
@@ -53,6 +54,8 @@
   let importing=$state(false), scanningImport=$state(false),importProgress=$state(0), importName=$state('');
   let manager=$state<{action:FileAction;targets:VaultEntry[]}>(),mutating=$state(false),menu=$state(''),marked=$state<string[]>([]);
   let mutationController:AbortController|undefined;
+  let downloading=$state(false),downloadName=$state(''),downloadProgress=$state<DownloadProgress>();
+  let downloadController:AbortController|undefined;
   let breadcrumbs = $state<{ name:string; id:string }[]>([{ name:'All files',id:'' }]);
   let folderPicker:HTMLInputElement;
   let importPicker:HTMLInputElement;
@@ -131,6 +134,7 @@
   }
   async function refreshRecents() { try { recents = (await getRecents()).toSorted((a,b)=>b.opened-a.opened).slice(0,6); } catch { /* Storage is optional. */ } }
   function clearSession() {
+    downloadController?.abort();downloadController=undefined;downloading=false;downloadProgress=undefined;downloadName='';
     migrationOpen=false;migrationBusy=false;showPassword=false;navigation++; creationController?.abort();creationController=undefined;createPassword=createConfirm='';authController?.abort(); importController?.abort(); mutationController?.abort();textSaveController?.abort();client?.close(); client=undefined;
     editor=undefined;savingText=false;textSaveController=undefined;conversions=[];activeConversion='';tab='files';convertingSave=false;selecting=false;selectionAnchor=undefined;
     clearThumbnailCache();stopMedia(); unlocked=false; entries=[]; selected=undefined; expanded=false; password=''; progress=0;
@@ -339,7 +343,16 @@
   }
   function activateEntry(event:MouseEvent,entry:VaultEntry){if(source?.type==='handle'&&(selecting||event.metaKey||event.ctrlKey||event.shiftKey)){if(!writeDisabled)mark(entry,event);}else select(entry);}
   function chooseTab(next:'files'|'conversions'){if(tab===next||!canLeaveEditor())return;rememberView();tab=next;pushView();}
-  async function entryAction(action:FileAction|'convert',entry:VaultEntry){
+  async function download(entry:VaultEntry):Promise<void>{
+    if(!client||!unlocked||busy||loading||migrationBusy)return;
+    const active=client,controller=new AbortController();downloadController=controller;downloading=true;busy=true;menu='';error=notice='';downloadName=entry.name;
+    downloadProgress={stage:'preparing',completed:0,total:0,bytes:0,totalBytes:0};
+    try{await downloadEntry(active,entry,{signal:controller.signal,progress:value=>{if(client===active)downloadProgress=value;}});if(client===active)notice=`Download ready: ${entry.name}${entry.kind==='folder'?'.zip':''}. This is an unencrypted copy.`;}
+    catch(e){if(client===active){if(controller.signal.aborted||e instanceof DOMException&&e.name==='AbortError')notice='Download cancelled.';else error=message(e);}}
+    finally{if(client===active){downloading=false;busy=false;downloadController=undefined;activity();}}
+  }
+  async function entryAction(action:FileAction|'convert'|'download',entry:VaultEntry){
+    if(action==='download'){await download(entry);return;}
     if(action!=='convert'){openManager(action,[entry]);return;}
     if(writeDisabled||!canLeaveEditor()||source?.type!=='handle')return;menu='';error='';
     const active=client;try{await writePermission(source.handle);if(client===active){const pending=conversions.find(job=>job.entry.id===entry.id);if(pending)activeConversion=pending.id;else{if(conversions.length>=8)throw new Error('Review or cancel a pending conversion before adding more.');const id=crypto.randomUUID();conversions.push({id,entry,parentId:currentDirectory,crumbs:breadcrumbs.map(crumb=>({...crumb})),status:'Preparing',progress:0});activeConversion=id;}}}catch(e){error=message(e);}
@@ -477,7 +490,7 @@
     const hidden=()=>scheduleBackgroundLock();
     const exit=()=>clearSession();
     document.addEventListener('visibilitychange',hidden); window.addEventListener('pagehide',exit);
-    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy||migrationBusy){event.preventDefault();event.returnValue='';}};
+    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy||migrationBusy||downloading){event.preventDefault();event.returnValue='';}};
     window.addEventListener('beforeunload',beforeExit);
     return ()=>{streamAttempt++;navigator.serviceWorker?.removeEventListener('controllerchange',controlled);appearance.removeEventListener('change',updateAppearance); document.removeEventListener('visibilitychange',hidden); window.removeEventListener('pagehide',exit);window.removeEventListener('beforeunload',beforeExit); clearSession();appHistory?.destroy();appHistory=undefined; };
   });
@@ -576,6 +589,7 @@
           {#if notice}<div class="notice-banner compact" role="status">{notice}<button class="icon-button" title="Dismiss" onclick={()=>notice=''}><Icon name="close" size={14}/></button></div>{/if}
           <div class="explorer-toolbar"><label class="search-field"><Icon name="search" size={17}/><input bind:this={searchInput} value={search} oninput={event=>{search=event.currentTarget.value;rememberView();}} placeholder="Find in this folder" aria-label="Find in this folder"/><kbd>⌘ K</kbd></label><select aria-label="Filter files" value={filter} onchange={event=>chooseFilter(event.currentTarget.value)}><option value="all">All types</option><option value="image">Pictures</option><option value="video">Videos</option><option value="audio">Audio</option><option value="text">Text</option></select><select aria-label="Sort files" value={sort} onchange={event=>{sort=event.currentTarget.value;rememberView();}}><option value="name">Name</option><option value="modified">Newest</option><option value="size">Largest</option></select>{#if source?.type==='handle'&&!selecting}<button class="small-button" disabled={writeDisabled} onclick={()=>selecting=true}>Select items</button>{/if}<div class="view-switch"><button class:active={view === 'grid'} aria-label="Gallery view" aria-pressed={view === 'grid'} onclick={()=>{view='grid';rememberView();}}><Icon name="grid" size={17}/></button><button class:active={view === 'list'} aria-label="List view" aria-pressed={view === 'list'} onclick={()=>{view='list';rememberView();}}><Icon name="list" size={18}/></button></div></div>
           {#if source?.type==='handle'&&(selecting||marked.length)}<div class="selection-toolbar"><label><input type="checkbox" aria-label="Select all visible items" checked={visible.length>0&&visible.every(entry=>marked.includes(entry.id))} disabled={writeDisabled||!visible.length} onchange={event=>marked=event.currentTarget.checked?visible.map(entry=>entry.id):[]}/>Select all</label>{#if markedEntries.length}<span>{markedEntries.length} selected</span><button class="small-button" disabled={writeDisabled} onclick={()=>openManager('move',markedEntries)}><Icon name="move" size={15}/>Move selected</button><button class="small-button danger-text" disabled={writeDisabled} onclick={()=>openManager('delete',markedEntries)}><Icon name="trash" size={15}/>Delete selected</button><button class="icon-button" aria-label="Clear selection" onclick={()=>{marked=[];selecting=false;selectionAnchor=undefined;}}><Icon name="close" size={15}/></button>{/if}<button class="small-button" onclick={()=>{marked=[];selecting=false;selectionAnchor=undefined;}}>Done selecting</button></div>{/if}
+          {#if downloading&&downloadProgress}<div class="import-status"><div><span>{downloadProgress.stage==='preparing'?'Preparing download':'Downloading'} {downloadName}</span><button class="small-button" onclick={()=>downloadController?.abort()}>Cancel download</button></div><progress max="1" value={downloadProgress.stage==='preparing'?undefined:downloadProgress.totalBytes?downloadProgress.bytes/downloadProgress.totalBytes:downloadProgress.total?downloadProgress.completed/downloadProgress.total:0} aria-label="Download progress"></progress><p>{downloadProgress.stage==='preparing'?`${downloadProgress.completed} entries found`:`${formatSize(downloadProgress.bytes)} of ${formatSize(downloadProgress.totalBytes)}`} · Downloads are unencrypted. Folders include hidden files; links are saved as text. Locking cancels the download.</p></div>{/if}
           {#if scanningImport}<div class="import-status" role="status"><div><span>Reading source folder…</span><button class="small-button" onclick={()=>importController?.abort()}>Cancel</button></div></div>{/if}
           {#if importing}<div class="import-status" role="status"><div><span>Adding {importName || 'files'}</span><span>{Math.round(importProgress*100)}%</span></div><progress max="1" value={importProgress} aria-label="File import progress"></progress><p>Files are encrypted locally. Locking the vault cancels the active import.</p></div>{/if}
           {#if warnings.length}<details class="vault-warnings"><summary>{warnings.length} {warnings.length === 1 ? 'entry could' : 'entries could'} not be opened</summary><ul>{#each warnings as warning}<li>{warning}</li>{/each}</ul></details>{/if}
@@ -583,16 +597,16 @@
           {:else if !visible.length}<div class="files-empty"><Icon name={search ? 'search' : 'folder'} size={44}/><h2>{search || browsable.length ? 'No matching files' : 'This folder is empty'}</h2><p>{search ? 'Try another name or change the filter.' : 'There are no matching files in this folder.'}</p></div>
           {:else if view === 'grid'}<div class="file-grid">{#each visible as entry (entry.id)}<div class="file-tile" class:marked={marked.includes(entry.id)}>
             <button class="file-card" class:selected={selected?.id === entry.id} onclick={event=>activateEntry(event,entry)} aria-label={`Open ${entry.name}`} draggable={!writeDisabled} ondragstart={event=>drag(event,entry)} ondragover={event=>{if(entry.kind==='folder'&&!writeDisabled&&event.dataTransfer?.types.includes('application/x-crypte-entries'))event.preventDefault();}} ondrop={event=>{if(entry.kind==='folder')void drop(event,entry);}}><Thumbnail {entry} {client} {streaming}/><div class="file-card-info"><span class="file-name">{entry.name}</span><span class="file-meta">{entry.kind === 'folder' ? 'Folder' : formatSize(entry.size)}</span>{#if entry.kind === 'folder'}<span class="folder-arrow"><Icon name="chevron" size={14}/></span>{/if}</div></button>
-            <EntryActions {entry} open={menu===entry.id} disabled={writeDisabled} marked={marked.includes(entry.id)} {selecting} ontoggle={()=>menu=menu===entry.id?'':entry.id} onmark={()=>mark(entry)} onaction={action=>entryAction(action,entry)}/>
+            <EntryActions {entry} open={menu===entry.id} disabled={busy||loading||migrationBusy} canWrite={source?.type==='handle'} marked={marked.includes(entry.id)} {selecting} ontoggle={()=>menu=menu===entry.id?'':entry.id} onmark={()=>mark(entry)} onaction={action=>entryAction(action,entry)}/>
           </div>{/each}</div>
           {:else}<div class="file-list"><div class="list-header"><span>Name</span><span>Size</span><span>Modified</span></div>{#each visible as entry (entry.id)}<div class="file-list-item" class:marked={marked.includes(entry.id)}>
             <button class="file-row" class:selected={selected?.id === entry.id} onclick={event=>activateEntry(event,entry)} aria-label={`Open ${entry.name}`} draggable={!writeDisabled} ondragstart={event=>drag(event,entry)} ondragover={event=>{if(entry.kind==='folder'&&!writeDisabled&&event.dataTransfer?.types.includes('application/x-crypte-entries'))event.preventDefault();}} ondrop={event=>{if(entry.kind==='folder')void drop(event,entry);}}><span class="row-name"><span class="row-icon" class:folder={entry.kind === 'folder'}>{#if entry.kind === 'image' || entry.kind === 'video'}<Thumbnail {entry} {client} {streaming} compact/>{:else}<Icon name={entry.kind} size={21}/>{/if}</span>{entry.name}</span><span>{entry.kind === 'folder' ? '—' : formatSize(entry.size)}</span><span>{entry.modified ? new Date(entry.modified).toLocaleDateString(undefined,{ month:'short',day:'numeric',year:'numeric' }) : '—'}</span></button>
-            <EntryActions {entry} open={menu===entry.id} disabled={writeDisabled} marked={marked.includes(entry.id)} {selecting} ontoggle={()=>menu=menu===entry.id?'':entry.id} onmark={()=>mark(entry)} onaction={action=>entryAction(action,entry)}/>
+            <EntryActions {entry} open={menu===entry.id} disabled={busy||loading||migrationBusy} canWrite={source?.type==='handle'} marked={marked.includes(entry.id)} {selecting} ontoggle={()=>menu=menu===entry.id?'':entry.id} onmark={()=>mark(entry)} onaction={action=>entryAction(action,entry)}/>
           </div>{/each}</div>{/if}
           <div class="explorer-footer"><span><Icon name="shield" size={14}/>{source?.type === 'handle' ? 'Local vault' : 'Read-only vault'}</span><span>{streaming ? 'Media streaming ready' : streamingPending ? 'Starting media streaming' : 'In-memory previews'}<span class="status-dot"></span></span></div>
           {/if}
         </div>
-        {#if selected&&tab==='files'}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} onsave={saveEditedText} oneditstate={state=>editor=state}/>{/key}{/if}
+        {#if selected&&tab==='files'}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} ondownload={download} downloadDisabled={busy||loading||migrationBusy} onsave={saveEditedText} oneditstate={state=>editor=state}/>{/key}{/if}
       </main>
     </div>
   </div>

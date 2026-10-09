@@ -4,14 +4,14 @@
   import ImageViewer from './ImageViewer.svelte';
   import VideoTimeline from './VideoTimeline.svelte';
   import {highlightCode,syntaxLanguage} from '../lib/highlighting';
-  import { readBlob, exportFile } from '../lib/previews';
+  import { readBlob } from '../lib/previews';
   import { mediaURL, revokeMediaURL } from '../lib/media';
   import { formatSize, type VaultEntry,type EditFingerprint } from '../lib/types';
   import { editableText,encodeEdit,TEXT_EDIT_LIMIT,type TextFormat } from '../lib/editing';
   import type { VaultClient } from '../lib/client';
   import { imagePreview } from '../lib/images';
   import { decodeText } from '../lib/text';
-  let { entry, client, streaming, streamingPending, streamingError, onretryStreaming, onclose, onnext, onprevious, expanded, ontoggle,canWrite,onsave,oneditstate }: { entry:VaultEntry; client:VaultClient; streaming:boolean; streamingPending:boolean; streamingError:string; onretryStreaming:()=>void; onclose:()=>void; onnext:()=>void; onprevious:()=>void; expanded:boolean; ontoggle:()=>void;canWrite:boolean;onsave:(entry:VaultEntry,file:File,expected:EditFingerprint,signal:AbortSignal)=>Promise<void>;oneditstate:(state:{dirty:boolean;saving:boolean;discard:()=>void}|undefined)=>void } = $props();
+  let { entry, client, streaming, streamingPending, streamingError, onretryStreaming, onclose, onnext, onprevious, expanded, ontoggle,canWrite,ondownload,downloadDisabled,onsave,oneditstate }: { entry:VaultEntry; client:VaultClient; streaming:boolean; streamingPending:boolean; streamingError:string; onretryStreaming:()=>void; onclose:()=>void; onnext:()=>void; onprevious:()=>void; expanded:boolean; ontoggle:()=>void;canWrite:boolean;ondownload:(entry:VaultEntry)=>Promise<void>;downloadDisabled:boolean;onsave:(entry:VaultEntry,file:File,expected:EditFingerprint,signal:AbortSignal)=>Promise<void>;oneditstate:(state:{dirty:boolean;saving:boolean;discard:()=>void}|undefined)=>void } = $props();
   let loading = $state(true), error = $state(''), url = $state(''), content = $state(''), exporting = $state(false), wrap = $state(true), fontSize = $state(14);
   let textSearch = $state('');
   let editing=$state(false),openingEditor=$state(false),saving=$state(false),draft=$state(''),original=$state('');
@@ -75,7 +75,7 @@
   });
   async function download() {
     exporting = true; error = '';
-    try { await exportFile(client,entry); }
+    try { await ondownload(entry); }
     catch (e) { if (!(e instanceof DOMException && e.name === 'AbortError')) error = e instanceof Error ? e.message : 'Unable to export.'; }
     finally { exporting = false; }
   }
@@ -111,5 +111,5 @@
     {:else if entry.kind === 'audio' && url}<div class="audio-view"><Icon name="audio" size={76}/><audio bind:this={media} src={url} controls preload="metadata" onerror={()=>error='Playback failed. Try exporting the file to a compatible player.'}></audio></div>
     {:else if !error}<div class="preview-empty"><Icon name="file" size={52}/><h3>No preview for this file type</h3><p>Export a decrypted copy to open it in another app.</p></div>{/if}
   </div>
-  <div class="preview-footer"><span><Icon name="shield" size={15}/> Decrypted on your device</span><button class="small-button" disabled={exporting||saving} onclick={download}><Icon name="download" size={15}/>{exporting ? 'Exporting…' : editing?'Export original':'Export file'}</button></div>
+  <div class="preview-footer"><span><Icon name="shield" size={15}/> Decrypted on your device</span><button class="small-button" disabled={exporting||saving||downloadDisabled} onclick={download}><Icon name="download" size={15}/>{exporting ? 'Downloading…' : editing?'Download original':'Download file'}</button></div>
 </section>
