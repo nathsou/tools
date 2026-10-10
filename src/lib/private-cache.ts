@@ -3,7 +3,10 @@ import type {VaultClient} from './client';
 import type {VaultEntry,WritePlan} from './types';
 import {safePath} from './filesystem';
 import {vaultWriteLock} from './imports';
-export const CACHE_FOLDER='.crype_cache';
+/** Shared with nathsou/drive, which reads and writes the same records for UVF vaults it stores. */
+export const CACHE_FOLDER='.thumbnails';
+/** The folder's former name: still read, so existing caches aren't regenerated, and cleaned on deletes. */
+const LEGACY_CACHE_FOLDER='.crype_cache';
 const opaque=async(value:string)=>toBase64Url(await digest(utf8(value)));
 const group=async(path:string)=>opaque(safePath(path).slice(0,3).join('/'));
 const filename=async(path:string)=>(await opaque(path))+'.thumb';
@@ -13,10 +16,12 @@ async function sourceFile(root:FileSystemDirectoryHandle,path:string){const part
 export class PrivateThumbnailCache {
   constructor(private root:FileSystemDirectoryHandle,private client:VaultClient,private vaultId:string){}
   async get(entry:VaultEntry,signal:AbortSignal):Promise<Blob|undefined>{
-    try {signal.throwIfAborted();const directory=await folder(this.root,`${CACHE_FOLDER}/v1/${await group(entry.path)}`),file=await(await directory.getFileHandle(await filename(entry.path))).getFile();
-      if(file.size>1024*1024)return;const clear=await this.client.cacheCrypt(new Uint8Array(await file.arrayBuffer()),binding(entry),true);
-      try{signal.throwIfAborted();return new Blob([clear],{type:'image/webp'});}finally{clear.fill(0);}
-    }catch{signal.throwIfAborted();return;}
+    for(const name of [CACHE_FOLDER,LEGACY_CACHE_FOLDER]){
+      try {signal.throwIfAborted();const directory=await folder(this.root,`${name}/v1/${await group(entry.path)}`),file=await(await directory.getFileHandle(await filename(entry.path))).getFile();
+        if(file.size>1024*1024)return;const clear=await this.client.cacheCrypt(new Uint8Array(await file.arrayBuffer()),binding(entry),true);
+        try{signal.throwIfAborted();return new Blob([clear],{type:'image/webp'});}finally{clear.fill(0);}
+      }catch{signal.throwIfAborted();}
+    }
   }
   async put(entry:VaultEntry,blob:Blob,signal:AbortSignal):Promise<void>{
     if(blob.size>1024*1024)return;
@@ -33,8 +38,11 @@ export class PrivateThumbnailCache {
 }
 /** Called while the vault write lock is held, after a successful unlink. */
 export async function removeCachedThumbnails(root:FileSystemDirectoryHandle,plan:WritePlan):Promise<void>{
+  for(const name of [CACHE_FOLDER,LEGACY_CACHE_FOLDER])await removeFrom(root,name,plan);
+}
+async function removeFrom(root:FileSystemDirectoryHandle,name:string,plan:WritePlan):Promise<void>{
   try{
-    const cache=await folder(root,`${CACHE_FOLDER}/v1`);
+    const cache=await folder(root,`${name}/v1`);
     if(plan.entry){try{const directory=await cache.getDirectoryHandle(await group(plan.entry.path));await directory.removeEntry(await filename(plan.entry.path));}catch(e){if(!(e instanceof DOMException && e.name==='NotFoundError'))throw e;}}
     for(const directory of plan.removedFolders){try{await cache.removeEntry(await group(directory.path),{recursive:true});}catch(e){if(!(e instanceof DOMException && e.name==='NotFoundError'))throw e;}}
   }catch(e){if(!(e instanceof DOMException && e.name==='NotFoundError'))throw e;}
