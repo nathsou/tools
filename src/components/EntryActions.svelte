@@ -1,7 +1,10 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import type { VaultEntry } from '../lib/types';
-  let {entry,open,disabled,canWrite,marked,selecting,ontoggle,onmark,onaction}:{entry:VaultEntry;open:boolean;disabled:boolean;canWrite:boolean;marked:boolean;selecting:boolean;ontoggle:()=>void;onmark:()=>void;onaction:(action:'rename'|'move'|'delete'|'convert'|'download')=>void}=$props();
+  import { isAgeName } from '../lib/age';
+  let {entry,open,disabled,canWrite,marked,selecting,ontoggle,onmark,onaction}:{entry:VaultEntry;open:boolean;disabled:boolean;canWrite:boolean;marked:boolean;selecting:boolean;ontoggle:()=>void;onmark:()=>void;onaction:(action:'rename'|'move'|'delete'|'convert'|'download'|'age-encrypt'|'age-decrypt')=>void}=$props();
+  const ageFile=$derived(entry.kind!=='folder'&&entry.kind!=='symlink');
+  const ageEncrypted=$derived(ageFile&&isAgeName(entry.name));
 </script>
 <div class="entry-controls">
   {#if canWrite}<input class="item-select" class:show={selecting||marked} type="checkbox" aria-label={`Select ${entry.name}`} checked={marked} onchange={onmark} disabled={disabled}/>{/if}
@@ -9,6 +12,8 @@
     <button class="icon-button" aria-label={`Actions for ${entry.name}`} aria-expanded={open} disabled={disabled} onclick={ontoggle}><Icon name="more" size={18}/></button>
     {#if open}<div class="entry-menu-popup">
       <button onclick={()=>onaction('download')}><Icon name="download" size={16}/>{entry.kind==='folder'?'Download folder (.zip)':'Download file'}</button>
+      {#if ageEncrypted}<button onclick={()=>onaction('age-decrypt')}><Icon name="unlock" size={16}/>Decrypt age file…</button>{/if}
+      {#if ageFile}<button onclick={()=>onaction('age-encrypt')}><Icon name="lock" size={16}/>Encrypt with age…</button>{/if}
       {#if canWrite}
       {#if ['image','video','audio'].includes(entry.kind)}<button onclick={()=>onaction('convert')}><Icon name="refresh" size={16}/>Convert…</button>{/if}
       <button onclick={()=>onaction('rename')}><Icon name="rename" size={16}/>Rename</button>

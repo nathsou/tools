@@ -7,6 +7,8 @@
   import MigrationDialog from './components/MigrationDialog.svelte';
   import Thumbnail from './components/Thumbnail.svelte';
   import ConversionDialog from './components/ConversionDialog.svelte';
+  import AgeDialog from './components/AgeDialog.svelte';
+  import type {EncryptedSpool} from './lib/private-cache';
   import {sourceStamp,type ConvertedMedia} from './lib/conversion';
   import {executeWriteUnlocked} from './lib/writes';
   import Preview from './components/Preview.svelte';
@@ -56,6 +58,8 @@
   let mutationController:AbortController|undefined;
   let downloading=$state(false),downloadName=$state(''),downloadProgress=$state<DownloadProgress>();
   let downloadController:AbortController|undefined;
+  type AgeJob={mode:'encrypt'|'decrypt';entry:VaultEntry;parentId:string};
+  let ageJob=$state<AgeJob>(),ageBusy=$state(false);
   let breadcrumbs = $state<{ name:string; id:string }[]>([{ name:'All files',id:'' }]);
   let folderPicker:HTMLInputElement;
   let importPicker:HTMLInputElement;
@@ -98,7 +102,7 @@
     return !conversionEntry&&target?.kind==='vault'&&target.tab===tab&&target.selectedId===selected?.id&&target.breadcrumbs.at(-1)?.id===currentDirectory&&!savingText || canLeaveEditor();
   }
   async function restoreView(target:AppView|undefined) {
-    closeManager();menu='';marked=[];
+    closeManager();ageJob=undefined;menu='';marked=[];
     if(target?.kind!=='vault' || !unlocked || !client) {
       if(unlocked)lock();else appHistory?.reset({kind:'locked'});
       return;
@@ -139,7 +143,7 @@
     editor=undefined;savingText=false;textSaveController=undefined;conversions=[];activeConversion='';tab='files';convertingSave=false;selecting=false;selectionAnchor=undefined;
     clearThumbnailCache();stopMedia(); unlocked=false; entries=[]; selected=undefined; expanded=false; password=''; progress=0;
     breadcrumbs=[{ name:'All files',id:'' }]; warnings=[]; busy=false; loading=false; settings=false; search=''; filter='all'; importing=false; importProgress=0; importName='';
-    manager=undefined;mutating=false;scanningImport=false;menu='';marked=[];mutationController=undefined;
+    manager=undefined;mutating=false;scanningImport=false;menu='';marked=[];mutationController=undefined;ageJob=undefined;ageBusy=false;
     appHistory?.reset({kind:'locked'});
     clearTimeout(idleTimer); clearTimeout(hiddenTimer);
   }
@@ -351,8 +355,9 @@
     catch(e){if(client===active){if(controller.signal.aborted||e instanceof DOMException&&e.name==='AbortError')notice='Download cancelled.';else error=message(e);}}
     finally{if(client===active){downloading=false;busy=false;downloadController=undefined;activity();}}
   }
-  async function entryAction(action:FileAction|'convert'|'download',entry:VaultEntry){
+  async function entryAction(action:FileAction|'convert'|'download'|'age-encrypt'|'age-decrypt',entry:VaultEntry){
     if(action==='download'){await download(entry);return;}
+    if(action==='age-encrypt'||action==='age-decrypt'){openAge(action==='age-encrypt'?'encrypt':'decrypt',entry);return;}
     if(action!=='convert'){openManager(action,[entry]);return;}
     if(writeDisabled||!canLeaveEditor()||source?.type!=='handle')return;menu='';error='';
     const active=client;try{await writePermission(source.handle);if(client===active){const pending=conversions.find(job=>job.entry.id===entry.id);if(pending)activeConversion=pending.id;else{if(conversions.length>=8)throw new Error('Review or cancel a pending conversion before adding more.');const id=crypto.randomUUID();conversions.push({id,entry,parentId:currentDirectory,crumbs:breadcrumbs.map(crumb=>({...crumb})),status:'Preparing',progress:0});activeConversion=id;}}}catch(e){error=message(e);}
@@ -370,6 +375,25 @@
     }finally{
       if(client===active){convertingSave=false;busy=false;const listing=await active.list(parentId);if(client===active&&currentDirectory===parentId){entries=listing.entries;warnings=listing.warnings;if(remove)selected=undefined;activity();}}
     }
+  }
+  function openAge(mode:AgeJob['mode'],entry:VaultEntry){
+    if(!client||!unlocked||busy||loading||migrationBusy||entry.kind==='folder'||entry.kind==='symlink')return;
+    menu='';error=notice='';ageJob={mode,entry,parentId:currentDirectory};
+  }
+  function closeAge(){ageJob=undefined;ageBusy=false;activity();}
+  async function prepareAgeWrite(){if(source?.type!=='handle')throw new Error('Saving into the vault requires native folder access.');await writePermission(source.handle);}
+  /** Publishes an age-decrypted spool, already authenticated and still encrypted at rest, as a new vault file. */
+  async function saveAgeDecryption(job:AgeJob,name:string,spool:EncryptedSpool,signal:AbortSignal):Promise<string>{
+    if(source?.type!=='handle'||!client||!info)throw new Error('The vault is locked.');
+    const active=client,root=source.handle,vaultId=info.id;busy=true;
+    try{
+      const saved=await vaultWriteLock(vaultId,signal,()=>addFile(root,active,{name,size:spool.size,read:(start,end)=>spool.read(start,end)},job.parentId,signal,()=>{}));
+      if(client===active){
+        notice=`Decrypted “${saved}” into this folder.`;
+        if(currentDirectory===job.parentId){const listing=await active.list(job.parentId);if(client===active&&currentDirectory===job.parentId){entries=listing.entries;warnings=listing.warnings;}}
+      }
+      return saved;
+    }finally{if(client===active){busy=false;activity();}}
   }
   function removeConversion(id:string){conversions=conversions.filter(job=>job.id!==id);if(activeConversion===id)activeConversion='';activity();}
   function closeConversion(){removeConversion(activeConversion);}
@@ -453,6 +477,7 @@
     if(migrationOpen)return;
     if(conversionEntry){if(event.key==='Escape')closeConversion();return;}
     if(manager){if(event.key==='Escape')closeManager();return;}
+    if(ageJob){if(event.key==='Escape')closeAge();return;}
     if(event.key==='Escape'&&menu){menu='';return;}
     if (event.key === 'Escape') { if (settings) dismissSettings(); else if(selecting){marked=[];selecting=false;selectionAnchor=undefined;}else if (selected) dismissPreview(); }
     if (!unlocked || (event.target instanceof HTMLElement && ['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))) return;
@@ -490,7 +515,7 @@
     const hidden=()=>scheduleBackgroundLock();
     const exit=()=>clearSession();
     document.addEventListener('visibilitychange',hidden); window.addEventListener('pagehide',exit);
-    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy||migrationBusy||downloading){event.preventDefault();event.returnValue='';}};
+    const beforeExit=(event:BeforeUnloadEvent)=>{if(editor?.dirty||savingText||conversions.length||creating&&busy||migrationBusy||downloading||ageBusy){event.preventDefault();event.returnValue='';}};
     window.addEventListener('beforeunload',beforeExit);
     return ()=>{streamAttempt++;navigator.serviceWorker?.removeEventListener('controllerchange',controlled);appearance.removeEventListener('change',updateAppearance); document.removeEventListener('visibilitychange',hidden); window.removeEventListener('pagehide',exit);window.removeEventListener('beforeunload',beforeExit); clearSession();appHistory?.destroy();appHistory=undefined; };
   });
@@ -562,7 +587,7 @@
     <footer class="welcome-footer"><span>Private by design</span><span>Cryptomator 7 & 8 · UVF 1 <span class="footer-separator">/</span> Works offline after installation</span></footer>
   </div>
 {:else if client && info}
-  <div class="app-shell" inert={settings||Boolean(manager)||Boolean(conversionEntry)||migrationOpen}>
+  <div class="app-shell" inert={settings||Boolean(manager)||Boolean(conversionEntry)||migrationOpen||Boolean(ageJob)}>
     <header class="app-header"><button class="brand" onclick={closeVault}><span class="brand-icon"><Icon name="lock" size={19}/></span>Crypte<span class="brand-dot">.</span></button><span class="header-divider"></span><div class="header-vault"><Icon name="folder" size={17}/><span>{info.name}</span><span class="vault-status">{info.family==='uvf'?'UVF':'Cryptomator'}</span></div><div class="app-header-actions"><span class="local-label"><span></span>Local files</span><button class="small-button migrate-button" aria-label="Migrate vault" onclick={openMigration} disabled={writeDisabled||converting} title={source?.type==='handle'?'Create a verified copy in another vault format':'Migration requires native folder access in a compatible browser'}><Icon name="move" size={16}/><span>Migrate vault</span></button><button class="icon-button" title="Preferences" onclick={openSettings}><Icon name="settings" size={19}/></button><button class="lock-button" onclick={lock}><Icon name="lock" size={15}/>Lock vault</button></div></header>
     <div class="app-body">
       <aside class="sidebar">
@@ -606,7 +631,7 @@
           <div class="explorer-footer"><span><Icon name="shield" size={14}/>{source?.type === 'handle' ? 'Local vault' : 'Read-only vault'}</span><span>{streaming ? 'Media streaming ready' : streamingPending ? 'Starting media streaming' : 'In-memory previews'}<span class="status-dot"></span></span></div>
           {/if}
         </div>
-        {#if selected&&tab==='files'}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} ondownload={download} downloadDisabled={busy||loading||migrationBusy} onsave={saveEditedText} oneditstate={state=>editor=state}/>{/key}{/if}
+        {#if selected&&tab==='files'}{#key selected.id}<Preview entry={selected} {client} {streaming} {streamingPending} {streamingError} onretryStreaming={prepareStreaming} {expanded} onclose={dismissPreview} onnext={()=>adjacent(1)} onprevious={()=>adjacent(-1)} ontoggle={toggleExpanded} canWrite={source?.type==='handle'&&!busy&&!loading} ondownload={download} downloadDisabled={busy||loading||migrationBusy} onsave={saveEditedText} oneditstate={state=>editor=state} onage={entry=>openAge('decrypt',entry)}/>{/key}{/if}
       </main>
     </div>
   </div>
@@ -615,6 +640,8 @@
 {#if unlocked && client && source?.type==='handle'}{#each conversions as job (job.id)}<ConversionDialog entry={job.entry} {client} root={source.handle} {streaming} active={activeConversion===job.id} onstatus={(status,progress)=>{job.status=status;job.progress=progress;}} onbackground={backgroundConversion} onclose={()=>removeConversion(job.id)} onlock={lock} oncommit={(result,remove,stamp,signal)=>commitConversion(job,result,remove,stamp,signal)}/>{/each}{/if}
 
 {#if migrationOpen && unlocked && client && info && source?.type==='handle'}<MigrationDialog {client} {info} root={source.handle} onclose={()=>migrationOpen=false} onopen={root=>{migrationOpen=false;void loadSource({type:'handle',handle:root});}} onbusy={value=>migrationBusy=value} onlock={lock}/>{/if}
+
+{#if ageJob && unlocked && client}{#key ageJob}<AgeDialog mode={ageJob.mode} entry={ageJob.entry} {client} canWrite={source?.type==='handle'} preparewrite={prepareAgeWrite} onsave={(name,spool,signal)=>saveAgeDecryption(ageJob!,name,spool,signal)} onbusy={value=>ageBusy=value} onclose={closeAge}/>{/key}{/if}
 
 {#if manager && unlocked && client && info}<FileActionsDialog action={manager.action} targets={manager.targets} {client} vaultName={info.name} parentId={currentDirectory} {hideDotfiles} busy={mutating} onconfirm={confirmActions} oncancel={closeManager}/>{/if}
 
