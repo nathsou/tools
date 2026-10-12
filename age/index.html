@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Encrypt and decrypt single files with age, using a passphrase or public keys. Runs in your browser; files never leave your device." />
+  <meta name="theme-color" content="#f8f9f4" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none';" />
+  <link rel="icon" href="../tools.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="../src/age/style.css" />
+  <title>Age — file encryption</title>
+</head>
+<body>
+  <div class="shell">
+    <header class="header"><a class="brand" href="../" aria-label="Tools home"><img src="../tools.svg" alt="" width="28" height="28"/>Tools<span>.</span><span class="divider">/</span><span class="current">Age</span></a><a class="quiet-link" href="https://github.com/nathsou/tools/tree/main/age">Source &amp; guide <span aria-hidden="true">↗</span></a></header>
+    <main>
+      <section class="intro"><p class="eyebrow">ONE FILE, SEALED</p><h1>Encrypt a file.<br/>Open it anywhere.</h1><p>Protect a single file with a passphrase or public keys.<br class="desktop-break"/> Standard <strong>age</strong> format, encrypted on this device.</p></section>
+      <div class="workspace">
+        <section class="card" aria-labelledby="card-title">
+          <div class="card-heading"><div><p class="eyebrow">AGE · VERSION 1</p><h2 id="card-title">Encrypt a file.</h2></div><span class="badge"><span class="status-dot"></span>Runs locally</span></div>
+          <noscript><p class="notice">Age needs JavaScript to encrypt files in your browser.</p></noscript>
+          <div class="mode-switch" role="group" aria-label="Task"><button id="mode-encrypt" aria-pressed="true">Encrypt</button><button id="mode-decrypt" aria-pressed="false">Decrypt</button><button id="mode-keys" aria-pressed="false">Keys</button></div>
+          <div id="notice" class="notice" role="alert" hidden></div>
+
+          <form id="encrypt-panel" novalidate>
+            <input id="encrypt-input" class="visually-hidden" type="file" tabindex="-1" aria-label="File to encrypt" />
+            <button id="encrypt-zone" class="drop-zone" type="button"><span class="zone-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="11" y="21" width="26" height="20" rx="4"/><path d="M16 21v-5a8 8 0 0 1 16 0v5M24 29v5"/></svg></span><strong id="encrypt-name">Drop a file to encrypt</strong><span id="encrypt-detail">or click to choose from your computer</span><span class="small-tag">Any file type · One file at a time</span></button>
+            <fieldset class="method" aria-label="Protect with"><legend>Protect with</legend>
+              <label><input type="radio" name="method" value="passphrase" checked /><span><strong>Passphrase</strong><small>Share it privately, out of band</small></span></label>
+              <label><input type="radio" name="method" value="recipients" /><span><strong>Public keys</strong><small>Only the matching secret keys open it</small></span></label>
+            </fieldset>
+            <div id="passphrase-fields">
+              <label for="encrypt-passphrase">Passphrase</label><input id="encrypt-passphrase" type="password" autocomplete="new-password" spellcheck="false" />
+              <label for="encrypt-confirm">Confirm passphrase</label><input id="encrypt-confirm" type="password" autocomplete="new-password" spellcheck="false" />
+              <label class="checkbox"><input id="show-passphrase" type="checkbox" /> Show passphrase</label>
+              <p class="field-help">Use a long, unique passphrase. Anyone who knows it can decrypt the file, and it cannot be recovered.</p>
+            </div>
+            <div id="recipient-fields" hidden>
+              <label for="recipients">Public keys</label><textarea id="recipients" rows="3" placeholder="age1…" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+              <p class="field-help">One age public key per line; # starts a comment. Each recipient decrypts with their own secret key. SSH, plugin and post-quantum keys are not supported.</p>
+            </div>
+            <details class="options"><summary>Output options</summary><div class="options-inner"><label class="checkbox"><input id="armor" type="checkbox" /> ASCII armor</label><p class="field-help">Writes printable text, for pasting into email or chat. It is about a third larger.</p></div></details>
+            <button id="encrypt" class="primary full" type="submit" disabled>Encrypt and save <span aria-hidden="true">→</span></button>
+          </form>
+
+          <form id="decrypt-panel" novalidate hidden>
+            <input id="decrypt-input" class="visually-hidden" type="file" tabindex="-1" aria-label="File to decrypt" />
+            <button id="decrypt-zone" class="drop-zone" type="button"><span class="zone-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="11" y="21" width="26" height="20" rx="4"/><path d="M16 21v-5a8 8 0 0 1 15.5-2.8M24 29v5"/></svg></span><strong id="decrypt-name">Drop an .age file</strong><span id="decrypt-detail">or click to choose from your computer</span><span class="small-tag">Binary or armored age files</span></button>
+            <div id="unlock-fields" hidden>
+              <div id="decrypt-passphrase-fields"><label for="decrypt-passphrase">Passphrase</label><input id="decrypt-passphrase" type="password" autocomplete="current-password" spellcheck="false" /></div>
+              <div id="identity-fields">
+                <label for="identities">Secret key</label><textarea id="identities" class="secret" rows="3" placeholder="AGE-SECRET-KEY-1…" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+                <input id="identity-input" class="visually-hidden" type="file" tabindex="-1" aria-label="Identity file" />
+                <button id="load-identity" class="text-button" type="button">Load an identity file</button>
+                <p class="field-help">Paste one or more AGE-SECRET-KEY-1 lines, or an identity file from age-keygen. Keys stay in this tab and are never stored.</p>
+              </div>
+              <button id="unlock" class="primary full" type="submit">Unlock <span aria-hidden="true">→</span></button>
+            </div>
+            <div id="unlocked" class="result" hidden><strong>Unlocked.</strong><p id="unlocked-detail"></p><button id="save-decrypted" class="primary full" type="button">Decrypt and save <span aria-hidden="true">→</span></button></div>
+          </form>
+
+          <section id="keys-panel" hidden aria-label="Key pairs">
+            <p class="description">Create an age key pair. Share the public key with people who send you files. Keep the secret key private: it decrypts everything sent to that public key.</p>
+            <button id="generate" class="primary full" type="button">Generate key pair <span aria-hidden="true">→</span></button>
+            <p id="keys-unsupported" class="field-help" hidden>This browser does not support X25519 keys. Passphrases still work; update your browser to use public keys.</p>
+            <div id="key-result" hidden>
+              <label for="public-key">Public key</label><div class="copy-row"><input id="public-key" readonly spellcheck="false" /><button id="copy-public" class="secondary" type="button">Copy</button></div>
+              <label for="secret-key">Secret key (identity file)</label><textarea id="secret-key" class="secret" rows="4" readonly spellcheck="false"></textarea>
+              <div class="button-row"><button id="save-identity" class="secondary" type="button">Save identity file</button><button id="use-key" class="secondary" type="button">Encrypt to this key</button></div>
+              <p class="field-help">The secret key is not stored anywhere and disappears when you leave this page. Save it somewhere safe, such as a password manager. Without it, files encrypted to this key cannot be recovered.</p>
+            </div>
+          </section>
+
+          <div id="progress-block" hidden><div class="progress-heading"><strong id="progress-title">Working…</strong><span id="progress-percent">0%</span></div><progress id="progress" max="1" value="0" aria-label="Progress"></progress><div class="progress-footer"><span id="progress-detail"></span><button id="cancel" class="text-button" type="button">Cancel</button></div></div>
+          <div id="result" class="result" role="status" hidden><strong id="result-title"></strong><p id="result-detail"></p></div>
+        </section>
+        <aside class="explanation"><span class="aside-mark" aria-hidden="true">✳</span><h2>A standard format,<br/> not a lock-in.</h2><ol class="steps"><li><span>01</span><div><h3>Choose a file</h3><p>Anything: a document, a photo, an archive. It is read and encrypted in this tab.</p></div></li><li><span>02</span><div><h3>Pick who can open it</h3><p>A passphrase you share privately, or the public keys of the people who should read it.</p></div></li><li><span>03</span><div><h3>Send the .age file</h3><p>Decrypt it here, with Crypte, or with the age command-line tools on any system.</p></div></li></ol><div class="privacy-note"><span aria-hidden="true">✓</span><p><strong>Nothing is uploaded.</strong>There is no server, account or analytics. Passphrases and keys are kept only while this page is open.</p></div></aside>
+      </div>
+      <section class="faq" aria-label="Good to know">
+        <details><summary>What is age?</summary><p>age is a simple, modern file encryption format with a published specification and implementations for many systems. Files made here open with the age and rage command-line tools, and vice versa. This tool implements version 1 of the format without third-party age libraries.</p></details>
+        <details><summary>Passphrase or public keys?</summary><p>A passphrase is easiest when you can share it safely, for example in person. Public keys avoid sharing a secret: anyone can encrypt to your public key, and only your secret key decrypts. Generate a key pair in the Keys tab, or use one made with age-keygen.</p></details>
+        <details><summary>How strong is the passphrase protection?</summary><p>Passphrases are stretched with scrypt using age’s default work factor, so each guess is deliberately slow. A long, random passphrase is still the most important protection. Files using work factors above 20 need more memory than a browser tab can use; decrypt them with the age command-line tool.</p></details>
+        <details><summary>Are file names and sizes protected?</summary><p>No. age encrypts the contents only. The encrypted file is named after the original, with .age added, and its size is close to the original size. Rename the file before sharing if its name is sensitive.</p></details>
+        <details><summary>Can I encrypt large files?</summary><p>Yes. With a Save File dialog (desktop Chrome and Edge), files are streamed to disk in small authenticated chunks, so their size is not limited by memory. Other browsers can encrypt and decrypt files up to 128 MiB. If decryption fails, nothing is saved.</p></details>
+        <details><summary>Which keys are supported?</summary><p>age X25519 public keys (age1…) and secret keys (AGE-SECRET-KEY-1…). SSH keys, hardware plugins such as YubiKeys, post-quantum keys and passphrase-protected identity files are not supported.</p></details>
+      </section>
+    </main>
+    <footer><span>A tool by <a href="https://github.com/nathsou">nathsou</a></span><span>age v1 · scrypt · X25519 · ChaCha20-Poly1305</span></footer>
+  </div>
+  <script type="module" src="../src/age/main.ts"></script>
+</body>
+</html>

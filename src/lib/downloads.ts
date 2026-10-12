@@ -1,11 +1,12 @@
 import type {VaultClient} from './client';
 import type {VaultEntry} from './types';
+import {chooseSaveTarget,MEMORY_LIMIT,saveChunks} from './save';
 
 export interface DownloadProgress {stage:'preparing'|'downloading';completed:number;total:number;bytes:number;totalBytes:number;}
 export interface DownloadOptions {signal?:AbortSignal;progress?:(value:DownloadProgress)=>void;}
 type Reader=Pick<VaultClient,'list'|'read'>;
 export interface ArchiveItem {path:string;entry:VaultEntry;}
-const BATCH=4*1024*1024, MEMORY_LIMIT=128*1024*1024, ZIP_LIMIT=0xffffffff;
+const BATCH=4*1024*1024, ZIP_LIMIT=0xffffffff;
 const encoder=new TextEncoder();
 function safeName(name:string):void {
   if(!name||name==='.'||name==='..'||/[\\/:\x00-\x1f\x7f]/.test(name)||/[. ]$/.test(name))throw new Error(`Cannot download unsafe or non-portable name: ${JSON.stringify(name)}.`);
@@ -73,32 +74,22 @@ export async function* zipChunks(client:Reader,items:ArchiveItem[],options:Downl
   for(const bytes of central){check(options);offset+=bytes.length;yield bytes;}
   const end=record(22,0x06054b50);end.view.setUint16(8,items.length,true);end.view.setUint16(10,items.length,true);end.view.setUint32(12,offset-centralStart,true);end.view.setUint32(16,centralStart,true);check(options);yield end.bytes;
 }
-async function* fileChunks(client:Reader,entry:VaultEntry,options:DownloadOptions){
+/** Decrypted file contents in batches; each batch is wiped when the generator resumes. */
+export async function* fileChunks(client:Pick<VaultClient,'read'>,entry:VaultEntry,options:DownloadOptions={},batch=BATCH){
   if(!entry.size){await client.read(entry,0,0);check(options);}
-  for(let start=0;start<entry.size;start+=BATCH){
-    check(options);const bytes=await client.read(entry,start,Math.min(start+BATCH,entry.size));
+  for(let start=0;start<entry.size;start+=batch){
+    check(options);const bytes=await client.read(entry,start,Math.min(start+batch,entry.size));
     try{check(options);yield bytes;}finally{bytes.fill(0);}
-    options.progress?.({stage:'downloading',completed:Math.min(start+BATCH,entry.size)===entry.size?1:0,total:1,bytes:Math.min(start+BATCH,entry.size),totalBytes:entry.size});
+    options.progress?.({stage:'downloading',completed:Math.min(start+batch,entry.size)===entry.size?1:0,total:1,bytes:Math.min(start+batch,entry.size),totalBytes:entry.size});
   }
 }
 export async function downloadEntry(client:Reader,entry:VaultEntry,options:DownloadOptions={}):Promise<void> {
   check(options);const folder=entry.kind==='folder',name=entry.name+(folder?'.zip':'');
-  const picker=(window as Window&{showSaveFilePicker?:(options:{suggestedName:string})=>Promise<FileSystemFileHandle>}).showSaveFilePicker;
   // Request the save location while the click still grants transient activation.
-  const handle=picker?await picker.call(window,{suggestedName:name}):undefined;check(options);
+  const handle=await chooseSaveTarget(name);check(options);
   const items=folder?await folderInventory(client,entry,options):undefined;
   const size=items?archiveSize(items):entry.size;
   if(!handle&&size>MEMORY_LIMIT)throw new Error('Downloads over 128 MiB require a browser with Save File support, such as desktop Chrome or Edge. Download smaller items instead.');
   options.progress?.({stage:'downloading',completed:0,total:items?.length??1,bytes:0,totalBytes:items?items.reduce((n,i)=>n+(i.entry.kind==='folder'?0:i.entry.size),0):entry.size});
-  const chunks=items?zipChunks(client,items,options):fileChunks(client,entry,options);
-  if(handle){
-    const writable=await handle.createWritable();
-    try{for await(const bytes of chunks){check(options);await writable.write(bytes);}check(options);await writable.close();}
-    catch(error){await writable.abort().catch(()=>{});throw error;}
-  }else{
-    // Blob snapshots copy each chunk before the generator clears plaintext buffers.
-    const parts:Blob[]=[];for await(const bytes of chunks){check(options);parts.push(new Blob([bytes]));}
-    check(options);const blob=new Blob(parts,{type:folder?'application/zip':entry.mime||'application/octet-stream'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');
-    try{anchor.href=url;anchor.download=name;anchor.click();}finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
-  }
+  await saveChunks(handle,name,folder?'application/zip':entry.mime,items?zipChunks(client,items,options):fileChunks(client,entry,options),options.signal);
 }

@@ -9,7 +9,9 @@ export default defineConfig({
   plugins: [svelte(), {
     name: 'crypte-offline',
     generateBundle(_, bundle) {
-      const files = [...new Set(['crypte/index.html', 'crypte/manifest.webmanifest', 'crypte/icon.svg', 'licenses/libheif.txt', 'licenses/libheif-js.txt', 'licenses/mediabunny.txt', ...Object.entries(bundle).filter(([name,file])=>name!=='crypte/service-worker.js'&&name!=='index.html'&&!name.startsWith('drop/')&&!name.startsWith('assets/drop-')&&!name.endsWith('.map')&&!(file.type==='chunk'&&file.name==='index')).map(([name])=>name)])];
+      // Age shares modules with Crypte, so its page-only files are recognised by entry and source, not by name.
+      const ageOnly=(name:string,file:(typeof bundle)[string])=>name.startsWith('age/')||(file.type==='chunk'?file.isEntry&&file.name==='age':file.originalFileNames.some(source=>source==='age/index.html'||source.startsWith('src/age/')));
+      const files = [...new Set(['crypte/index.html', 'crypte/manifest.webmanifest', 'crypte/icon.svg', 'licenses/libheif.txt', 'licenses/libheif-js.txt', 'licenses/mediabunny.txt', ...Object.entries(bundle).filter(([name,file])=>name!=='crypte/service-worker.js'&&name!=='index.html'&&!name.startsWith('drop/')&&!name.startsWith('assets/drop-')&&!ageOnly(name,file)&&!name.endsWith('.map')&&!(file.type==='chunk'&&file.name==='index')).map(([name])=>name)])];
       offlineAssets=files;
       const version = createHash('sha256').update(JSON.stringify(bundle)).digest('hex').slice(0, 12);
       const sw = bundle['crypte/service-worker.js'];
@@ -25,7 +27,7 @@ export default defineConfig({
   build: {
     target: 'es2022',
     rollupOptions: {
-      input: { index:'index.html', crypte:'crypte/index.html', drop:'drop/index.html', 'service-worker': 'src/service-worker.ts' },
+      input: { index:'index.html', crypte:'crypte/index.html', drop:'drop/index.html', age:'age/index.html', 'service-worker': 'src/service-worker.ts' },
       output: { codeSplitting:{groups:[{name:'mediabunny',test:/node_modules[\/]mediabunny/}]}, entryFileNames: chunk => chunk.name === 'service-worker' ? 'crypte/service-worker.js' : 'assets/[name]-[hash].js' }
     }
   },

@@ -39,6 +39,8 @@ jobs:
         run: mise exec -- bunx playwright install --with-deps chromium
       - name: Verify direct browser transfers
         run: mise exec -- bun run test:e2e tests/e2e/drop.spec.ts
+      - name: Verify age file encryption
+        run: mise exec -- bun run test:e2e tests/e2e/age.spec.ts
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [check, drop-browser]
